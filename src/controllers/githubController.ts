@@ -6,6 +6,8 @@ dotenv.config(); // ← load env first
 import { S3Client } from "@aws-sdk/client-s3";
 import { ingestRepository } from "../services/ingestService";
 import { parseCommit } from "../services/parserService";
+import { OpenAIEmbedder } from "../ai/adapters/openaiEmbedder";
+import { embedCommit } from "../services/embedService";
 
 // one S3 client for the process
 const s3 = new S3Client({
@@ -65,7 +67,7 @@ async function queueIngest(opts: {
     try {
       const cfg = buildCfg();
 
-      // 1) INGEST
+      // 1) INGEST → writes manifest + blobs
       const manifest = await ingestRepository({
         owner,
         repo,
@@ -76,13 +78,11 @@ async function queueIngest(opts: {
         layout: buildLayout(tenantId, owner, repo, commit),
         dryRun: false,               // enable writes
         saveTarball: true,           // optional, handy for audit/debug
-        // installationId: <plug your GitHub App installation ID if you wire that auth here>
       });
-
-      const commitSha = manifest.commit; // ← resolved SHA from ingest
+      const commitSha = manifest.commit;
       console.log(`✅ Ingest complete for ${owner}/${repo} @ ${commitSha} (${branch ?? "nobranch"})`);
 
-      // 2) PARSE (code + markdown)
+      // 2) PARSE (code + markdown) → writes parse/chunks/*.jsonl and chunks.index.json
       await parseCommit({
         s3,
         layout: {
@@ -92,18 +92,45 @@ async function queueIngest(opts: {
           repo,
           commit: commitSha,
         },
-        writePerFileJsonl: true,          // writes parse/chunks/<file>.jsonl with text
+        writePerFileJsonl: true,
         modelLabel: "chunker-v0.1",
         targetTokensPerChunk: 1600,
       });
+      console.log(
+        `🧩 Parse complete → s3://${process.env.S3_BUCKET_NAME}/tenants/${tenantId ?? "default"}/repos/${owner}/${repo}/commits/${commitSha}/parse/`
+      );
+
+      // 3) EMBED (optional guard if no API key set)
+      if (!process.env.OPENAI_API_KEY) {
+        console.warn("⚠️ Skipping embeddings: OPENAI_API_KEY is not set.");
+        return;
+      }
+      const embedder = new OpenAIEmbedder({
+        apiKey: process.env.OPENAI_API_KEY,
+        model: process.env.OPENAI_EMBED_MODEL || "text-embedding-3-small",
+      });
+
+      const embedResult = await embedCommit({
+        s3,
+        layout: {
+          bucket: process.env.S3_BUCKET_NAME!,
+          tenantId: tenantId ?? "default",
+          owner,
+          repo,
+          commit: commitSha,
+        },
+        embedder,
+        batchSize: 64,      // tune if you hit rate limits
+        partSize: 2000,     // vectors per JSONL part
+      });
 
       console.log(
-        `🧩 Parse complete → s3://${
-          process.env.S3_BUCKET_NAME
-        }/tenants/${tenantId ?? "default"}/repos/${owner}/${repo}/commits/${commitSha}/parse/`
+        `🧠 Embeddings complete → provider=${embedResult.provider} dim=${embedResult.dim} total=${embedResult.total} ` +
+        `at s3://${process.env.S3_BUCKET_NAME}/tenants/${tenantId ?? "default"}/repos/${owner}/${repo}/commits/${commitSha}/parse/embeddings/`
       );
+
     } catch (err) {
-      console.error(`❌ Ingest/Parse failed for ${owner}/${repo} @ ${commit}`, err);
+      console.error(`❌ Ingest/Parse/Embed failed for ${owner}/${repo} @ ${commit}`, err);
     }
   });
 }
