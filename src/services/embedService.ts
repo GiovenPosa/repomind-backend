@@ -54,7 +54,7 @@ export async function embedCommit(params: {
       continue;
     }
 
-    const items = jsonl
+    const items = jsonl 
       .split("\n")
       .filter(Boolean)
       .map(line => JSON.parse(line) as { id: string; text: string });
