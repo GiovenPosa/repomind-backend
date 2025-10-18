@@ -48,32 +48,33 @@ export class GitHubController {
     }
   }
 
-  static async handleWebhook(req: Request, res: Response) {
+  static async handleWebhook(
+    req: Request & { rawBody?: Buffer; body?: any },
+    res: Response
+  ) {
     try {
-      // Get webhook headers
-      const eventType = req.headers['x-github-event'] as string;
-      const signature = req.headers['x-hub-signature-256'] as string;
+      const eventType  = req.headers['x-github-event'] as string;
+      const signature  = (req.headers['x-hub-signature-256'] as string) || '';
       const deliveryId = req.headers['x-github-delivery'] as string;
-      
-      // Verify webhook signature if secret is configured
+
+      // Use raw bytes for HMAC (fallback to JSON string if not present)
+      const raw = req.rawBody ?? Buffer.from(JSON.stringify(req.body || {}));
+
       if (process.env.GITHUB_WEBHOOK_SECRET) {
         const isValid = GitHubController.verifyWebhookSignature(
-          JSON.stringify(req.body),
+          raw,
           signature,
           process.env.GITHUB_WEBHOOK_SECRET
         );
-        
         if (!isValid) {
-          console.error('❌ Invalid webhook signature!');
-          console.error('   Expected signature:', signature);
-          console.error('   Secret configured:', !!process.env.GITHUB_WEBHOOK_SECRET);
+          console.error('❌ Invalid webhook signature!', { deliveryId, eventType });
           return res.status(401).json({ error: 'Invalid signature' });
         }
         console.log('✅ Webhook signature verified successfully');
       } else {
         console.warn('⚠️  No webhook secret configured - skipping verification');
       }
-      
+
       console.log('\n🔔 GitHub Webhook Received:');
       console.log('┌─────────────────────────────────────');
       console.log('│ Event Type:', eventType);
@@ -81,78 +82,69 @@ export class GitHubController {
       console.log('│ Timestamp:', new Date().toISOString());
       console.log('│ From App:', process.env.GITHUB_APP_ID);
       console.log('└─────────────────────────────────────');
-      
+
+      // If body is still a Buffer (e.g., when using express.raw), parse it now
+      const payload: any = Buffer.isBuffer((req as any).body)
+        ? JSON.parse((req as any).body.toString('utf8'))
+        : req.body;
+
       // Store webhook event
-      const webhookEvent = {
+      GitHubController.webhookEvents.push({
         eventType,
         deliveryId,
         timestamp: new Date().toISOString(),
-        payload: req.body
-      };
-      GitHubController.webhookEvents.push(webhookEvent);
-      
-      // Get the payload
-      const payload = req.body;
-      
-      // Process different event types
-      switch(eventType) {
+        payload
+      });
+
+      // Process events
+      switch (eventType) {
         case 'ping':
           GitHubController.handlePingEvent(payload);
           break;
-          
         case 'repository':
-          // IMPORTANT: This is where new repos are detected!
           await GitHubController.handleRepositoryEvent(payload as RepositoryEvent);
           break;
-          
         case 'push':
           GitHubController.handlePushEvent(payload);
           break;
-          
         case 'pull_request':
           GitHubController.handlePullRequestEvent(payload);
           break;
-          
         case 'issues':
           GitHubController.handleIssuesEvent(payload);
           break;
-          
         case 'star':
           GitHubController.handleStarEvent(payload);
           break;
-          
         case 'fork':
           GitHubController.handleForkEvent(payload);
           break;
-          
         case 'installation':
           console.log('🔧 Installation event:', payload.action);
           break;
-
         case 'installation_repositories':
           console.log('📦 Installation repositories changed:', payload.action);
           break;
-          
         default:
           console.log(`📌 Unhandled event type: ${eventType}`);
       }
-      
-      // Send success response to GitHub
-      res.status(200).json({
+
+      return res.status(200).json({
         message: 'Webhook received successfully',
         eventType,
         deliveryId,
         timestamp: new Date().toISOString()
       });
-      
+
     } catch (error) {
       console.error('❌ Webhook processing error:', error);
-      res.status(500).json({
+      return res.status(500).json({
         error: 'Failed to process webhook',
         message: error instanceof Error ? error.message : 'Unknown error'
       });
     }
   }
+
 
   /**
    * Get webhook status for debugging
@@ -214,24 +206,19 @@ export class GitHubController {
   /**
    * Verify webhook signature from GitHub
    */
-  static verifyWebhookSignature(payload: string, signature: string, secret: string): boolean {
-    if (!signature || !secret) {
-      console.warn('⚠️  Webhook signature or secret missing');
-      console.log('   Signature present:', !!signature);
-      console.log('   Secret present:', !!secret);
+  static verifyWebhookSignature(payload: Buffer, signatureHeader: string, secret: string): boolean {
+    if (!signatureHeader || !secret) {
+      console.warn('⚠️  Webhook signature or secret missing', { hasHeader: !!signatureHeader, hasSecret: !!secret });
       return false;
     }
-
-    const hmac = crypto.createHmac('sha256', secret);
-    const digest = 'sha256=' + hmac.update(payload).digest('hex');
-    
+    const expected = 'sha256=' + crypto.createHmac('sha256', secret).update(payload).digest('hex');
     try {
-      return crypto.timingSafeEqual(
-        Buffer.from(digest),
-        Buffer.from(signature)
-      );
-    } catch (error) {
-      console.error('Signature verification error:', error);
+      const a = Buffer.from(signatureHeader, 'utf8');
+      const b = Buffer.from(expected, 'utf8');
+      if (a.length !== b.length) return false;
+      return crypto.timingSafeEqual(a, b);
+    } catch (err) {
+      console.error('Signature verification error:', err);
       return false;
     }
   }
