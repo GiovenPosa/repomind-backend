@@ -1,9 +1,87 @@
 import { Request, Response } from "express";
 import crypto from 'crypto';
 import * as dotenv from 'dotenv';
+dotenv.config(); // ← load env first
 
-// Load environment variables
-dotenv.config();
+import { S3Client } from "@aws-sdk/client-s3";
+import { ingestRepository } from "../services/ingestService";
+
+// one S3 client for the process
+const s3 = new S3Client({
+  region: process.env.AWS_REGION || "eu-west-2",
+});
+
+// defaults you can tweak or read from env
+const DEFAULT_INCLUDE = [
+  "src/**",
+  "README.md",
+  ".github/workflows/**",
+  "package.json",
+  "tsconfig*.json",
+  "Dockerfile",
+  "scripts/**"
+];
+const DEFAULT_EXCLUDE = [
+  "node_modules/**",
+  "dist/**",
+  "coverage/**",
+  "**/*.map",
+  "**/*.png","**/*.jpg","**/*.jpeg","**/*.gif","**/*.pdf","**/*.zip"
+];
+
+function buildCfg() {
+  return {
+    include: DEFAULT_INCLUDE,
+    exclude: DEFAULT_EXCLUDE,
+    maxFileKB: 800,
+  };
+}
+
+function buildLayout(tenantId: string | undefined, owner: string, repo: string, commit: string) {
+  return {
+    bucket: process.env.S3_BUCKET!,        // e.g. repomind-s3-bucket
+    tenantId: tenantId ?? "default",
+    owner,
+    repo,
+    commit
+  };
+}
+
+function cleanBranch(ref?: string) {
+  if (!ref) return undefined;
+  return ref.replace(/^refs\/heads\//, "");
+}
+
+/** Fire-and-forget: run ingest off the request lifecycle */
+async function queueIngest(opts: {
+  owner: string;
+  repo: string;
+  commit: string;     // SHA or branch; service resolves to SHA
+  branch?: string;    // "main" or "refs/heads/main"
+  tenantId?: string;
+}) {
+  const { owner, repo, commit, branch, tenantId } = opts;
+  setImmediate(async () => {
+    try {
+      const cfg = buildCfg();
+      await ingestRepository({
+        owner,
+        repo,
+        commit,                      // can be "main" or a SHA
+        branch,                      // used to write refs/branches/{branch}.json
+        cfg,
+        s3,
+        layout: buildLayout(tenantId, owner, repo, commit),
+        dryRun: false,               // enable writes
+        saveTarball: true,           // optional, handy for audit/debug
+        // installationId: <plug your GitHub App installation ID if you wire that auth here>
+      });
+      console.log(`✅ Ingest complete for ${owner}/${repo} @ ${commit} (${branch ?? "nobranch"})`);
+    } catch (err) {
+      console.error(`❌ Ingest failed for ${owner}/${repo} @ ${commit}`, err);
+    }
+  });
+}
 
 // Interface for repository event
 interface RepositoryEvent {
@@ -35,7 +113,6 @@ export class GitHubController {
 
   static async getUserRepose(req: Request, res: Response) {
     try {
-      // TODO: Implement fetching user repositories
       res.json({
         message: "Get user repos endpoint",
         status: "Not implemented yet"
@@ -101,30 +178,39 @@ export class GitHubController {
         case 'ping':
           GitHubController.handlePingEvent(payload);
           break;
+
         case 'repository':
           await GitHubController.handleRepositoryEvent(payload as RepositoryEvent);
           break;
+
         case 'push':
           GitHubController.handlePushEvent(payload);
           break;
+
         case 'pull_request':
           GitHubController.handlePullRequestEvent(payload);
           break;
+
         case 'issues':
           GitHubController.handleIssuesEvent(payload);
           break;
+
         case 'star':
           GitHubController.handleStarEvent(payload);
           break;
+
         case 'fork':
           GitHubController.handleForkEvent(payload);
           break;
+
         case 'installation':
           console.log('🔧 Installation event:', payload.action);
           break;
+
         case 'installation_repositories':
           console.log('📦 Installation repositories changed:', payload.action);
           break;
+
         default:
           console.log(`📌 Unhandled event type: ${eventType}`);
       }
@@ -144,7 +230,6 @@ export class GitHubController {
       });
     }
   }
-
 
   /**
    * Get webhook status for debugging
@@ -245,7 +330,7 @@ export class GitHubController {
     console.log('   Private:', payload.repository?.private ? 'Yes' : 'No');
     console.log('   Owner:', payload.repository?.owner?.login);
     
-    // NEW REPOSITORY CREATED - This is what we're looking for!
+    // NEW REPOSITORY CREATED - ingest initial snapshot off default branch (if any)
     if (payload.action === 'created') {
       console.log('\n');
       console.log('╔════════════════════════════════════════╗');
@@ -263,8 +348,7 @@ export class GitHubController {
       console.log('│ Owner:', payload.repository.owner.login);
       console.log('│ Created By:', payload.sender.login);
       console.log('└─────────────────────────────────────');
-      
-      // Store the new repository
+
       const newRepo = {
         id: payload.repository.id,
         name: payload.repository.name,
@@ -277,24 +361,25 @@ export class GitHubController {
         createdBy: payload.sender.login,
         defaultBranch: payload.repository.default_branch
       };
-      
       GitHubController.newRepositories.push(newRepo);
-      
       console.log('\n✅ Repository added to tracking system');
-      console.log(`📊 Total new repositories tracked: ${GitHubController.newRepositories.length}`);
-      
-      // TODO: Automated actions when new repo is created:
-      console.log('\n🤖 Automated actions to implement:');
-      console.log('   [ ] Clone repository locally');
-      console.log('   [ ] Initialize with README template');
-      console.log('   [ ] Add default labels');
-      console.log('   [ ] Set up branch protection');
-      console.log('   [ ] Configure GitHub Actions');
-      console.log('   [ ] Send notification to Slack/Discord');
-      console.log('   [ ] Add to project board');
-      console.log('\n');
+
+      // Kick off an initial ingest (if repo has a default branch / content)
+      try {
+        const owner = payload.repository.owner.login;
+        const repo = payload.repository.name;
+        const defaultBranch = payload.repository.default_branch || "main";
+        queueIngest({
+          owner,
+          repo,
+          commit: defaultBranch,         // service resolves to SHA
+          branch: defaultBranch          // writes refs/branches/{branch}.json
+        });
+      } catch (e) {
+        console.warn("⚠️ Initial ingest attempt failed (likely empty repo):", e instanceof Error ? e.message : e);
+      }
     }
-    
+
     // Handle other repository actions
     switch(payload.action) {
       case 'deleted':
@@ -328,12 +413,34 @@ export class GitHubController {
     console.log('   Pusher:', payload.pusher?.name);
     console.log('   Commits:', payload.commits?.length || 0);
     
-    // Log each commit
+    // Log each commit (first 3)
     payload.commits?.slice(0, 3).forEach((commit: any, index: number) => {
       console.log(`   Commit ${index + 1}:`, commit.message.split('\n')[0]);
       console.log(`     Author: ${commit.author?.name}`);
       console.log(`     SHA: ${commit.id?.substring(0, 7)}`);
     });
+
+    // Kick ingest for head commit
+    try {
+      const owner = payload.repository?.owner?.name || payload.repository?.owner?.login;
+      const repo  = payload.repository?.name;
+      const commitSha = payload.after || payload.head_commit?.id; // head SHA
+      const branch = cleanBranch(payload.ref); // "main"
+
+      if (!owner || !repo || !commitSha) {
+        console.warn('⚠️ Missing owner/repo/commitSha in push payload; skipping ingest.');
+        return;
+      }
+
+      queueIngest({
+        owner,
+        repo,
+        commit: commitSha,  // snapshot this commit
+        branch              // write refs/branches/{branch}.json
+      });
+    } catch (e) {
+      console.error('❌ Failed to queue ingest for push:', e);
+    }
   }
 
   private static handlePullRequestEvent(payload: any) {
