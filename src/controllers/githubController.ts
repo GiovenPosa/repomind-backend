@@ -5,6 +5,7 @@ dotenv.config(); // ← load env first
 
 import { S3Client } from "@aws-sdk/client-s3";
 import { ingestRepository } from "../services/ingestService";
+import { parseCommit } from "../services/parserService";
 
 // one S3 client for the process
 const s3 = new S3Client({
@@ -52,7 +53,6 @@ function cleanBranch(ref?: string) {
   return ref.replace(/^refs\/heads\//, "");
 }
 
-/** Fire-and-forget: run ingest off the request lifecycle */
 async function queueIngest(opts: {
   owner: string;
   repo: string;
@@ -64,7 +64,9 @@ async function queueIngest(opts: {
   setImmediate(async () => {
     try {
       const cfg = buildCfg();
-      await ingestRepository({
+
+      // 1) INGEST
+      const manifest = await ingestRepository({
         owner,
         repo,
         commit,                      // can be "main" or a SHA
@@ -76,9 +78,32 @@ async function queueIngest(opts: {
         saveTarball: true,           // optional, handy for audit/debug
         // installationId: <plug your GitHub App installation ID if you wire that auth here>
       });
-      console.log(`✅ Ingest complete for ${owner}/${repo} @ ${commit} (${branch ?? "nobranch"})`);
+
+      const commitSha = manifest.commit; // ← resolved SHA from ingest
+      console.log(`✅ Ingest complete for ${owner}/${repo} @ ${commitSha} (${branch ?? "nobranch"})`);
+
+      // 2) PARSE (code + markdown)
+      await parseCommit({
+        s3,
+        layout: {
+          bucket: process.env.S3_BUCKET_NAME!,
+          tenantId: tenantId ?? "default",
+          owner,
+          repo,
+          commit: commitSha,
+        },
+        writePerFileJsonl: true,          // writes parse/chunks/<file>.jsonl with text
+        modelLabel: "chunker-v0.1",
+        targetTokensPerChunk: 1600,
+      });
+
+      console.log(
+        `🧩 Parse complete → s3://${
+          process.env.S3_BUCKET_NAME
+        }/tenants/${tenantId ?? "default"}/repos/${owner}/${repo}/commits/${commitSha}/parse/`
+      );
     } catch (err) {
-      console.error(`❌ Ingest failed for ${owner}/${repo} @ ${commit}`, err);
+      console.error(`❌ Ingest/Parse failed for ${owner}/${repo} @ ${commit}`, err);
     }
   });
 }

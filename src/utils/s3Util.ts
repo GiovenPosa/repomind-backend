@@ -1,4 +1,3 @@
-// src/utils/s3Util.ts
 import {
   S3Client,
   GetObjectCommand,

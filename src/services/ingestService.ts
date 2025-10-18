@@ -21,6 +21,8 @@ import type {
   S3IngestLayout
 } from '../types/s3';
 
+import { guessLang } from '../utils/parserUtil';
+
 export async function ingestRepository(params: {
   owner: string;
   repo: string;
@@ -202,27 +204,10 @@ function countLines(buf: Buffer) {
   return n;
 }
 
-function guessLang(path: string) {
-  const p = path.toLowerCase();
-  if (p.endsWith('.ts')) return 'TypeScript';
-  if (p.endsWith('.tsx')) return 'TypeScript';
-  if (p.endsWith('.js')) return 'JavaScript';
-  if (p.endsWith('.jsx')) return 'JavaScript';
-  if (p.endsWith('.py')) return 'Python';
-  if (p.endsWith('.java')) return 'Java';
-  if (p.endsWith('.md')) return 'Markdown';
-  if (p.endsWith('.yml') || p.endsWith('.yaml')) return 'YAML';
-  if (p.endsWith('.json')) return 'JSON';
-  if (p.endsWith('.sh')) return 'Shell';
-  return 'Text';
-}
-
 function sanitizeBranchName(name?: string): string | undefined {
   if (!name) return undefined;
   return name.replace(/^refs\/heads\//, '');
 }
-
-
 
 async function getOctokit({ installationId }: { installationId?: number }) {
   // For quick testing, prefer a PAT in env (GITHUB_TOKEN with Contents:Read)

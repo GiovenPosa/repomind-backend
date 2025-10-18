@@ -1,8 +1,6 @@
 import { S3Client } from "@aws-sdk/client-s3";
-import { createHash } from "crypto";
 import type { S3IngestLayout, ManifestJson, ManifestFileEntry } from "../types/s3";
 import type { ChunkRecord, ChunkIndex } from "../types/parser";
-
 import {
   s3Prefix as prefix,
   getJson,
@@ -10,7 +8,17 @@ import {
   putJson,
   putText,
 } from "../utils/s3Util";
-
+import {
+  normalizeText,
+  avgLineLen,
+  byteOffsetForLine,
+  countLines,
+  sha256,
+  approxTokenCount,
+  shortId,
+  chunkId,
+  guessLang,
+} from "../utils/parserUtil";
 
 type ChunkWithText = ChunkRecord & { text: string };
 
@@ -82,17 +90,20 @@ export async function parseCommit(params: {
     // optional per-file JSONL with chunk text (handy for downstream)
     if (writePerFileJsonl && chunksWithText.length) {
       const fileId = shortId(file.path);
-      const jsonl = chunksWithText.map((c) =>
-        JSON.stringify({
-          id: c.id,
-          filePath: c.filePath,
-          fileSha: c.fileSha,
-          hash: c.hash,
-          startLine: c.startLine,
-          endLine: c.endLine,
-          text: c.text, // present only in per-file JSONL
-        })
-      ).join("\n") + "\n";
+      const jsonl =
+        chunksWithText
+          .map((c) =>
+            JSON.stringify({
+              id: c.id,
+              filePath: c.filePath,
+              fileSha: c.fileSha,
+              hash: c.hash,
+              startLine: c.startLine,
+              endLine: c.endLine,
+              text: c.text, // present only in per-file JSONL
+            })
+          )
+          .join("\n") + "\n";
 
       await putText(
         s3,
@@ -141,10 +152,7 @@ export async function parseCommit(params: {
   return index;
 }
 
-
-
-/* --------------------- Selection helpers -------------------- */
-
+/* --------------------- Selection helpers (stay here) -------------------- */
 function isCodeOrMarkdown(f: ManifestFileEntry): boolean {
   const lang = (f.lang || guessLang(f.path)).toLowerCase();
   if (f.binary) return false;
@@ -158,8 +166,7 @@ function isCodeOrMarkdown(f: ManifestFileEntry): boolean {
   return codeLangs.has(lang);
 }
 
-/* ---------------------- Chunking logic ---------------------- */
-
+/* ---------------------- Chunking logic (stay here) ---------------------- */
 function chunkCodeByLines(args: {
   repoPath: string;
   fileSha: string;
@@ -278,85 +285,4 @@ function chunkMarkdown(args: {
   }
 
   return chunks;
-}
-
-/* ----------------------- Util functions --------------------- */
-
-function normalizeText(s: string) {
-  // Normalize CRLF → LF; trim trailing spaces on lines
-  return s.replace(/\r\n/g, "\n").replace(/[ \t]+$/gm, "");
-}
-
-function avgLineLen(text: string) {
-  const lines = text.split("\n");
-  if (!lines.length) return 40;
-  const total = lines.reduce((n, l) => n + l.length, 0);
-  return Math.max(10, Math.floor(total / lines.length));
-}
-
-function byteOffsetForLine(fullText: string, lineIndex: number) {
-  if (lineIndex <= 0) return 0;
-  let ofs = 0;
-  let remaining = lineIndex;
-  for (const line of fullText.split("\n")) {
-    if (remaining-- <= 0) break;
-    ofs += Buffer.byteLength(line, "utf8") + 1; // +1 for '\n'
-  }
-  return ofs;
-}
-
-function countLines(s: string) {
-  if (!s) return 1;
-  let n = 1;
-  for (let i = 0; i < s.length; i++) if (s.charCodeAt(i) === 10) n++;
-  return n;
-}
-
-function sha256(text: string) {
-  return createHash("sha256").update(text, "utf8").digest("hex");
-}
-
-function approxTokenCount(s: string) {
-  // cheap approximation: ~4 chars per token
-  const chars = Buffer.byteLength(s, "utf8");
-  return Math.max(1, Math.ceil(chars / 4));
-}
-
-function shortId(s: string) {
-  // stable short id from path
-  return createHash("sha1").update(s, "utf8").digest("hex").slice(0, 12);
-}
-
-function chunkId(filePath: string, ord: number) {
-  return `${shortId(filePath)}-${String(ord).padStart(4, "0")}`;
-}
-
-function guessLang(path: string) {
-  const p = path.toLowerCase();
-  if (p.endsWith(".md")) return "Markdown";
-  if (p.endsWith(".ts") || p.endsWith(".tsx")) return "TypeScript";
-  if (p.endsWith(".js") || p.endsWith(".jsx")) return "JavaScript";
-  if (p.endsWith(".py")) return "Python";
-  if (p.endsWith(".java")) return "Java";
-  if (p.endsWith(".go")) return "Go";
-  if (p.endsWith(".rs")) return "Rust";
-  if (p.endsWith(".c")) return "C";
-  if (p.endsWith(".cpp") || p.endsWith(".cc") || p.endsWith(".cxx")) return "C++";
-  if (p.endsWith(".cs")) return "CSharp";
-  if (p.endsWith(".kt")) return "Kotlin";
-  if (p.endsWith(".swift")) return "Swift";
-  if (p.endsWith(".rb")) return "Ruby";
-  if (p.endsWith(".php")) return "PHP";
-  if (p.endsWith(".sh")) return "Shell";
-  return "Text";
-}
-
-
-async function streamToBuffer(stream: NodeJS.ReadableStream): Promise<Buffer> {
-  const chunks: Uint8Array[] = [];
-  return await new Promise<Buffer>((resolve, reject) => {
-    stream.on("data", (d) => chunks.push(d));
-    stream.on("end", () => resolve(Buffer.concat(chunks)));
-    stream.on("error", reject);
-  });
 }
