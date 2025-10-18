@@ -39,7 +39,7 @@ function buildCfg() {
 
 function buildLayout(tenantId: string | undefined, owner: string, repo: string, commit: string) {
   return {
-    bucket: process.env.S3_BUCKET!,        // e.g. repomind-s3-bucket
+    bucket: process.env.S3_BUCKET_NAME!, 
     tenantId: tenantId ?? "default",
     owner,
     repo,

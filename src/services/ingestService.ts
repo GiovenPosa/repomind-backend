@@ -1,11 +1,14 @@
 import { Octokit } from '@octokit/rest';
 import { Minimatch } from 'minimatch';
 import { createHash } from 'crypto';
+import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+
 import {
-  S3Client,
-  PutObjectCommand,
-  HeadObjectCommand
-} from '@aws-sdk/client-s3';
+  s3Prefix,
+  putJsonUnderRepo,
+  putJsonRaw,
+  s3Head,
+} from "../utils/s3Util";
 
 import type {
   IncludeExclude,
@@ -189,10 +192,6 @@ async function resolveToCommitSha(octokit: Octokit, owner: string, repo: string,
   return data.sha;
 }
 
-function s3Prefix({ tenantId, owner, repo }: S3IngestLayout) {
-  return `tenants/${tenantId ?? 'default'}/repos/${owner}/${repo}/`;
-}
-
 function toBlobKey(sha256: string) {
   return `blobs/${sha256.slice(0, 2)}/${sha256.slice(2, 4)}/${sha256}`;
 }
@@ -223,43 +222,7 @@ function sanitizeBranchName(name?: string): string | undefined {
   return name.replace(/^refs\/heads\//, '');
 }
 
-async function putJsonUnderRepo(
-  s3: S3Client,
-  layout: S3IngestLayout,
-  keyUnderRepo: string,
-  data: unknown
-) {
-  const key = s3Prefix(layout) + keyUnderRepo;
-  await s3.send(new PutObjectCommand({
-    Bucket: layout.bucket,
-    Key: key,
-    Body: Buffer.from(JSON.stringify(data, null, 2), 'utf8'),
-    ContentType: 'application/json'
-  }));
-}
 
-async function putJsonRaw(
-  s3: S3Client,
-  bucket: string,
-  key: string,
-  data: unknown
-) {
-  await s3.send(new PutObjectCommand({
-    Bucket: bucket,
-    Key: key,
-    Body: Buffer.from(JSON.stringify(data, null, 2), 'utf8'),
-    ContentType: 'application/json'
-  }));
-}
-
-async function s3Head(s3: S3Client, bucket: string, key: string): Promise<boolean> {
-  try {
-    await s3.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 async function getOctokit({ installationId }: { installationId?: number }) {
   // For quick testing, prefer a PAT in env (GITHUB_TOKEN with Contents:Read)
