@@ -168,7 +168,7 @@ async function queueIngest(opts: {
         // Detailed Axios error logging for fast diagnosis
         const status = e?.response?.status;
         const data   = e?.response?.data;
-        console.error("❌ Docs generation/publish failed:", {
+        console.error("Docs generation/publish failed:", {
           message: e?.message,
           status,
           data,
