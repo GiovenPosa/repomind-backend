@@ -4,10 +4,14 @@ import * as dotenv from 'dotenv';
 dotenv.config(); // ← load env first
 
 import { S3Client } from "@aws-sdk/client-s3";
+import { getJson, s3Prefix as prefix } from "../utils/s3Util";
+import type { ChunkIndex } from "../types/parser";
 import { ingestRepository } from "../services/ingestService";
 import { parseCommit } from "../services/parserService";
 import { OpenAIEmbedder } from "../ai/adapters/openaiEmbedder";
 import { embedCommit } from "../services/embedService";
+import { saveCommitRow, upsertChunks, insertEmbeddings } from "../services/indexerService";
+
 
 // one S3 client for the process
 const s3 = new S3Client({
@@ -58,8 +62,8 @@ function cleanBranch(ref?: string) {
 async function queueIngest(opts: {
   owner: string;
   repo: string;
-  commit: string;     // SHA or branch; service resolves to SHA
-  branch?: string;    // "main" or "refs/heads/main"
+  commit: string;
+  branch?: string;
   tenantId?: string;
 }) {
   const { owner, repo, commit, branch, tenantId } = opts;
@@ -67,40 +71,31 @@ async function queueIngest(opts: {
     try {
       const cfg = buildCfg();
 
-      // 1) INGEST → writes manifest + blobs
+      // 1) INGEST
       const manifest = await ingestRepository({
-        owner,
-        repo,
-        commit,                      // can be "main" or a SHA
-        branch,                      // used to write refs/branches/{branch}.json
-        cfg,
-        s3,
+        owner, repo, commit, branch, cfg, s3,
         layout: buildLayout(tenantId, owner, repo, commit),
-        dryRun: false,               // enable writes
-        saveTarball: true,           // optional, handy for audit/debug
+        dryRun: false, saveTarball: true,
       });
       const commitSha = manifest.commit;
-      console.log(`✅ Ingest complete for ${owner}/${repo} @ ${commitSha} (${branch ?? "nobranch"})`);
+      console.log(`✅ Ingest complete for ${owner}/${repo} @ ${commitSha}`);
 
-      // 2) PARSE (code + markdown) → writes parse/chunks/*.jsonl and chunks.index.json
+      // ✅ DB: commit row
+      await saveCommitRow(manifest);
+
+      // 2) PARSE
       await parseCommit({
         s3,
-        layout: {
-          bucket: process.env.S3_BUCKET_NAME!,
-          tenantId: tenantId ?? "default",
-          owner,
-          repo,
-          commit: commitSha,
-        },
-        writePerFileJsonl: true,
-        modelLabel: "chunker-v0.1",
-        targetTokensPerChunk: 1600,
+        layout: { bucket: process.env.S3_BUCKET_NAME!, tenantId: tenantId ?? "default", owner, repo, commit: commitSha },
+        writePerFileJsonl: true, modelLabel: "chunker-v0.1", targetTokensPerChunk: 1600,
       });
-      console.log(
-        `🧩 Parse complete → s3://${process.env.S3_BUCKET_NAME}/tenants/${tenantId ?? "default"}/repos/${owner}/${repo}/commits/${commitSha}/parse/`
-      );
+      console.log(`🧩 Parse complete → s3://${process.env.S3_BUCKET_NAME}/.../parse/`);
 
-      // 3) EMBED (optional guard if no API key set)
+      // ✅ DB: chunk metadata
+      const idxKey = `${prefix({ tenantId: tenantId ?? "default", owner, repo })}commits/${commitSha}/parse/chunks.index.json`;      const index = await getJson<ChunkIndex>(s3, process.env.S3_BUCKET_NAME!, idxKey);
+      await upsertChunks(owner, repo, commitSha, index.chunks);
+
+      // 3) EMBED → S3 + DB
       if (!process.env.OPENAI_API_KEY) {
         console.warn("⚠️ Skipping embeddings: OPENAI_API_KEY is not set.");
         return;
@@ -112,22 +107,17 @@ async function queueIngest(opts: {
 
       const embedResult = await embedCommit({
         s3,
-        layout: {
-          bucket: process.env.S3_BUCKET_NAME!,
-          tenantId: tenantId ?? "default",
-          owner,
-          repo,
-          commit: commitSha,
-        },
+        layout: { bucket: process.env.S3_BUCKET_NAME!, tenantId: tenantId ?? "default", owner, repo, commit: commitSha },
         embedder,
-        batchSize: 64,      // tune if you hit rate limits
-        partSize: 2000,     // vectors per JSONL part
+        batchSize: 64,
+        partSize: 2000,
+        // ⬇️ stream into Postgres while generating
+        onBatchVectors: async (rows) => {
+          await insertEmbeddings(embedder.name, embedder.dim, rows);
+        },
       });
 
-      console.log(
-        `🧠 Embeddings complete → provider=${embedResult.provider} dim=${embedResult.dim} total=${embedResult.total} ` +
-        `at s3://${process.env.S3_BUCKET_NAME}/tenants/${tenantId ?? "default"}/repos/${owner}/${repo}/commits/${commitSha}/parse/embeddings/`
-      );
+      console.log(`🧠 Embeddings complete → ${embedResult.total} vectors (provider=${embedResult.provider})`);
 
     } catch (err) {
       console.error(`❌ Ingest/Parse/Embed failed for ${owner}/${repo} @ ${commit}`, err);

@@ -7,8 +7,9 @@ import {
 import type { S3IngestLayout } from "../types/s3";
 
 /** Build the S3 prefix for a repo namespace */
-export function s3Prefix({ tenantId, owner, repo }: S3IngestLayout) {
-  return `tenants/${tenantId ?? "default"}/repos/${owner}/${repo}/`;
+type S3RepoScope = { tenantId?: string; owner: string; repo: string };
+export function s3Prefix({ tenantId, owner, repo }: S3RepoScope) {
+  return `tenants/${tenantId ?? 'default'}/repos/${owner}/${repo}/`;
 }
 
 /** Put JSON under repo prefix, e.g. commits/{sha}/manifest.json */

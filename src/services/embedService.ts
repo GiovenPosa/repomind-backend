@@ -22,10 +22,11 @@ export async function embedCommit(params: {
   s3: S3Client;
   layout: S3IngestLayout & { commit: string };
   embedder: Embedder;
-  batchSize?: number;          // default 64
-  partSize?: number;           // how many vectors per JSONL part (defaults 2000)
+  batchSize?: number;
+  partSize?: number;
+  onBatchVectors?: (rows: { id: string; vector: number[] }[]) => Promise<void>;
 }) {
-  const { s3, layout, embedder, batchSize = 64, partSize = 2000 } = params;
+  const { s3, layout, embedder, batchSize = 64, partSize = 2000, onBatchVectors } = params;
 
   // 1) Load manifest (to know which files we expect chunks for)
   const manifestKey = prefix(layout) + `commits/${layout.commit}/manifest.json`;
@@ -34,47 +35,44 @@ export async function embedCommit(params: {
   // Select code + markdown only (same rule as parser)
   const selected = manifest.files.filter(isCodeOrMarkdown).filter(f => !!f.storedAt);
 
-  const providerDir = `${prefix(layout)}commits/${layout.commit}/parse/embeddings/${embedder.name}/`;
-
   let total = 0;
   let part = 0;
   let currentLines: string[] = [];
+  const providerDir = `${prefix(layout)}commits/${layout.commit}/parse/embeddings/${embedder.name}/`;
 
-  // 2) Walk each file's chunks JSONL and gather (id, text)
   for (const f of selected) {
     const fileId = shortId(f.path);
     const jsonlKey = `${prefix(layout)}commits/${layout.commit}/parse/chunks/${fileId}.jsonl`;
 
-    // Per-file JSONL may not exist if parse was configured otherwise; skip cleanly
     let jsonl: string;
-    try {
-      jsonl = await getText(s3, layout.bucket, jsonlKey);
-    } catch {
-      // Skip silently if no JSONL for this file
-      continue;
-    }
+    try { jsonl = await getText(s3, layout.bucket, jsonlKey); }
+    catch { continue; }
 
-    const items = jsonl 
+    const items = jsonl
       .split("\n")
       .filter(Boolean)
       .map(line => JSON.parse(line) as { id: string; text: string });
 
-    // 3) Batch-embed
     for (let i = 0; i < items.length; i += batchSize) {
       const batch = items.slice(i, i + batchSize);
       const vectors = await embedder.embed(batch.map(b => b.text));
 
-      // 4) Serialize as Float32 -> base64 in JSONL
+      // ✅ write JSONL to S3 and (optionally) push to DB
+      const dbRows: { id: string; vector: number[] }[] = [];
+
       for (let j = 0; j < batch.length; j++) {
         const id = batch[j].id;
         const vec = vectors[j];
         if (!vec) continue;
 
+        // S3 JSONL (base64 float32)
         const b64 = float32ToBase64(vec);
         currentLines.push(JSON.stringify({ id, dim: embedder.dim, vector_b64: b64 }));
 
+        // DB row (float array)
+        dbRows.push({ id, vector: vec });
         total++;
-        // Flush a part when large enough
+
         if (currentLines.length >= partSize) {
           const partKey = `${providerDir}vectors_part-${String(part).padStart(5, "0")}.jsonl`;
           await putJsonl(s3, layout.bucket, partKey, currentLines);
@@ -82,16 +80,19 @@ export async function embedCommit(params: {
           currentLines = [];
         }
       }
+
+      // 🔌 DB batch insert (if provided)
+      if (dbRows.length && onBatchVectors) {
+        await onBatchVectors(dbRows);
+      }
     }
   }
 
-  // 5) Flush remainder
   if (currentLines.length) {
     const partKey = `${providerDir}vectors_part-${String(part).padStart(5, "0")}.jsonl`;
     await putJsonl(s3, layout.bucket, partKey, currentLines);
   }
 
-  // 6) Write embeddings index/summary
   await putJson(
     s3,
     layout.bucket,
