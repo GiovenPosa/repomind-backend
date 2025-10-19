@@ -12,28 +12,52 @@ export async function saveCommitRow(manifest: ManifestJson) {
   ));
 }
 
+// src/services/indexerService.ts
 export async function upsertChunks(
   owner: string, repo: string, commitSha: string, chunks: ChunkRecord[]
 ) {
   if (!chunks.length) return;
+
   const values: any[] = [];
   const rows: string[] = [];
   let i = 1;
 
   for (const ch of chunks) {
-    rows.push(`($${i++},$${i++},$${i++},$${i++},$${i++},$${i++},$${i++},$${i++})`);
+    // NOTE: now 9 placeholders (added hash)
+    rows.push(
+      `($${i++},$${i++},$${i++},$${i++},$${i++},$${i++},$${i++},$${i++},$${i++})`
+    );
     values.push(
-      ch.id, owner, repo, commitSha, ch.filePath, ch.startLine, ch.endLine, ch.lang ?? "Text"
+      ch.id,
+      owner,
+      repo,
+      commitSha,
+      ch.filePath,
+      ch.startLine,
+      ch.endLine,
+      ch.lang ?? "Text",
+      ch.hash // <-- include the chunk hash computed by parserService
     );
   }
 
-  await withClient(c => c.query(
-    `insert into repomind.chunks
-      (id, owner, repo, commit_sha, file_path, start_line, end_line, lang)
-     values ${rows.join(",")}
-     on conflict (id) do nothing`,
-    values
-  ));
+  await withClient(c =>
+    c.query(
+      `
+      insert into repomind.chunks
+        (id, owner, repo, commit_sha, file_path, start_line, end_line, lang, hash)
+      values ${rows.join(",")}
+      on conflict (id) do update
+        set commit_sha = excluded.commit_sha,
+            file_path  = excluded.file_path,
+            start_line = excluded.start_line,
+            end_line   = excluded.end_line,
+            lang       = excluded.lang,
+            hash       = excluded.hash,
+            created_at = now()
+      `,
+      values
+    )
+  );
 }
 
 export async function insertEmbeddings(
