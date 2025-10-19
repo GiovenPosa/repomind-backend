@@ -150,7 +150,7 @@ async function queueIngest(opts: {
             spaceDesc: `RepoMind automated docs for ${owner}/${repo} @ ${commitSha}`,
             rootTitle: "Code Base Documentation",
             pages,
-          });
+          }); 
 
           console.log(`🚀 Published docs to Confluence for ${owner}/${repo} @ ${commitSha}`);
         }
