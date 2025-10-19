@@ -145,12 +145,12 @@ async function queueIngest(opts: {
 
           const publishResult = await upsertPageTree({
             spaceKey,
-            spaceName: `${toTitleCase(repo)} Docs`,          // Title case for readability
+            spaceName: `${toTitleCase(repo)} Docs`,
             spaceDesc: `RepoMind automated docs for ${owner}/${repo} @ ${commitSha}`,
             rootTitle: "Code Base Documentation",
             pages,
           });
-
+          
           console.log("🚀 Published docs to Confluence", {
             spaceId: publishResult.spaceId,
             rootId: publishResult.rootId,
