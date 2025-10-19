@@ -11,10 +11,7 @@ import { embedCommit } from "../services/embedService";
 import { saveCommitRow, upsertChunks, insertEmbeddings } from "../services/indexerService";
 import { DEFAULT_SECTIONS } from "../types/docs";
 import { generateDocsPages } from "../services/documentationService";
-import { promises as fs } from "fs";
-import * as path from "path";
-import { marked } from "marked";
-import { upsertPageTree } from "../services/confluencePublisher"; // low-level calls live there
+import { upsertPageTree, toTitleCase, normalizeSpaceKey } from "../services/confluencePublisher";
 
 // one S3 client for the process
 const s3 = new S3Client({
@@ -60,13 +57,6 @@ function buildLayout(tenantId: string | undefined, owner: string, repo: string, 
 function cleanBranch(ref?: string) {
   if (!ref) return undefined;
   return ref.replace(/^refs\/heads\//, "");
-}
-
-function toTitleCase(str: string) {
-  return str
-    .split(/[-_ ]+/) // split on dash, underscore, or space
-    .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-    .join(" ");
 }
 
 async function queueIngest(opts: {
@@ -128,10 +118,10 @@ async function queueIngest(opts: {
 
       console.log(`🧠 Embeddings complete → ${embedResult.total} vectors (provider=${embedResult.provider})`);
 
-      // 4) DOCS → generate in memory and publish to Confluence
+     // 4) DOCS → generate in memory and publish to Confluence
       try {
         if (!process.env.OPENAI_API_KEY) {
-          console.warn("Skipping docs generation: OPENAI_API_KEY is not set.");
+          console.warn("⚠️ Skipping docs generation: OPENAI_API_KEY is not set.");
         } else {
           const pages = await generateDocsPages({
             owner,
@@ -142,21 +132,43 @@ async function queueIngest(opts: {
             sections: DEFAULT_SECTIONS,
           });
 
-          // build a stable spaceKey and publish
-          const spaceKey = (owner + "_" + repo).toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 20);
-          await upsertPageTree({
+          // Build a stable per-repo space key (no .env override needed)
+          const rawSpaceKey = `${owner}_${repo}`;
+          const spaceKey = normalizeSpaceKey(rawSpaceKey);
+
+          console.log("🧭 Confluence target");
+          console.log("   • base:", process.env.CONFLUENCE_BASE_URL);
+          console.log("   • spaceKey:", spaceKey);
+          console.log("   • spaceName:", `${toTitleCase(repo)} Docs`);
+          console.log("   • rootTitle:", "Code Base Documentation");
+          console.log("   • pageCount:", pages.length);
+
+          const publishResult = await upsertPageTree({
             spaceKey,
-            spaceName: `${toTitleCase(repo)} Docs`, // ← every word capitalized
+            spaceName: `${toTitleCase(repo)} Docs`,          // Title case for readability
             spaceDesc: `RepoMind automated docs for ${owner}/${repo} @ ${commitSha}`,
             rootTitle: "Code Base Documentation",
             pages,
-          }); 
+          });
 
-          console.log(`🚀 Published docs to Confluence for ${owner}/${repo} @ ${commitSha}`);
+          console.log("🚀 Published docs to Confluence", {
+            spaceId: publishResult.spaceId,
+            rootId: publishResult.rootId,
+            repo: `${owner}/${repo}`,
+            commit: commitSha,
+          });
         }
-      } catch (e) {
-        console.error("❌ Docs generation/publish failed:", e);
+      } catch (e: any) {
+        // Detailed Axios error logging for fast diagnosis
+        const status = e?.response?.status;
+        const data   = e?.response?.data;
+        console.error("❌ Docs generation/publish failed:", {
+          message: e?.message,
+          status,
+          data,
+        });
       }
+
     } catch (err) {
       console.error(`❌ Ingest/Parse/Embed/Publish failed for ${owner}/${repo} @ ${commit}`, err);
     }
