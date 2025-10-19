@@ -17,7 +17,7 @@ export function avgLineLen(text: string) {
 /** Byte offset for the start of a given 0-based line index */
 export function byteOffsetForLine(fullText: string, lineIndex: number) {
   if (lineIndex <= 0) return 0;
-  let ofs = 0;
+  let ofs = 0; 
   let remaining = lineIndex;
   for (const line of fullText.split("\n")) {
     if (remaining-- <= 0) break;
