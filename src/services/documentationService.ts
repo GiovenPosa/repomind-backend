@@ -7,6 +7,7 @@ import { inferCategory } from "../types/docs";
 import type { DocSectionSpec, DocCategory } from "../types/docs";
 import type { Generator } from "../ai/interfaces";
 import OpenAI from "openai";
+import { marked } from "marked";
 
 // small helper to embed queries without coupling to your controller
 async function embedQuery(q: string): Promise<number[]> {
@@ -124,6 +125,89 @@ export async function generateDocsLocal(opts: GenOpts) {
   console.log(`📚 wrote ${path.join(outDir, "README.md")}`);
 
   return { outDir };
+}
+
+export async function generateDocsPages(opts: {
+  owner: string;
+  repo: string;
+  commit: string;
+  tenantId?: string;
+  bucket?: string;
+  sections: DocSectionSpec[];
+  capSnippetChars?: number;
+  keepIfCategory?: boolean;
+}): Promise<{ title: string; html: string }[]> {
+  const {
+    owner, repo, commit, tenantId, bucket,
+    sections, capSnippetChars = 2500, keepIfCategory = true
+  } = opts;
+
+  const generator = new OpenAIGenerator({
+    apiKey: process.env.OPENAI_API_KEY,
+    model: process.env.OPENAI_CHAT_MODEL || "gpt-4o-mini",
+  });
+
+  const pages: { title: string; html: string }[] = [];
+
+  for (const sec of sections) {
+    // ---- same retrieval pipeline as generateDocsLocal ----
+    const collected = new Map<string, { id: string; file_path: string; start_line: number; end_line: number; lang: string; distance: number }>();
+    for (const q of sec.queries) {
+      const vec = await embedQuery(q);
+      const hits = await semanticSearch({
+        owner, repo, queryVector: vec, topK: sec.topK ?? 16, provider: "openai",
+      });
+      for (const h of hits) if (!collected.has(h.id)) collected.set(h.id, h);
+    }
+
+    const wanted = sec.category;
+    const allHits = Array.from(collected.values());
+    const filtered = wanted && keepIfCategory
+      ? allHits.filter(h => {
+          const cat = inferCategory(h.file_path);
+          if (wanted === "architecture") return true;
+          if (cat === "unknown") return true;
+          return cat === wanted;
+        })
+      : allHits;
+
+    let snippets: { id: string; filePath: string; startLine: number; endLine: number; text: string }[] = [];
+    if (bucket) {
+      const textMap = await loadChunkTexts({
+        s3: new (await import("@aws-sdk/client-s3")).S3Client({ region: process.env.AWS_REGION || "eu-west-2" }),
+        bucket,
+        tenantId,
+        owner,
+        repo,
+        commit,
+        chunkIds: filtered.map(h => h.id),
+      });
+      snippets = filtered.map(h => {
+        const row = textMap[h.id];
+        const txt = (row?.text ?? "").slice(0, capSnippetChars);
+        return {
+          id: h.id,
+          filePath: row?.filePath ?? h.file_path,
+          startLine: row?.startLine ?? h.start_line,
+          endLine: row?.endLine ?? h.end_line,
+          text: txt
+        };
+      }).filter(s => s.text && s.text.length);
+    }
+
+    const md = await generateSectionMarkdown({
+      title: sec.title,
+      q: sec.queries.join(" | "),
+      hint: sec.hint,
+      snippets,
+      generator
+    });
+
+    const html = String(await marked.parse(md));
+    pages.push({ title: sec.title, html });
+  }
+
+  return pages;
 }
 
 /* ---- prompt for markdown ---- */

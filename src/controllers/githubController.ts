@@ -10,7 +10,7 @@ import { OpenAIEmbedder } from "../ai/adapters/openaiEmbedder";
 import { embedCommit } from "../services/embedService";
 import { saveCommitRow, upsertChunks, insertEmbeddings } from "../services/indexerService";
 import { DEFAULT_SECTIONS } from "../types/docs";
-import { generateDocsLocal } from "../services/documentationService";
+import { generateDocsPages } from "../services/documentationService";
 import { promises as fs } from "fs";
 import * as path from "path";
 import { marked } from "marked";
@@ -62,31 +62,11 @@ function cleanBranch(ref?: string) {
   return ref.replace(/^refs\/heads\//, "");
 }
 
-// ADD: publish helper (kept local for now; you can move it to services later)
-async function publishGeneratedDocs(owner: string, repo: string, commitSha: string, outDir: string) {
-  // gather .md files → html pages
-  const files = await fs.readdir(outDir);
-  const mdFiles = files.filter(f => f.endsWith(".md"));
-  const pages: { title: string; html: string }[] = [];
-
-  for (const f of mdFiles) {
-    const md = await fs.readFile(path.join(outDir, f), "utf8");
-    const html = String(await marked.parse(md)); // ← await makes it a string
-    const title = f.replace(/\.md$/i, "").replace(/[-_]/g, " ");
-    pages.push({ title, html });
-  }
-
-  // stable, idempotent space key per repo
-  const spaceKey = (owner + "_" + repo).toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 20);
-
-  // create/ensure space + root page, then upsert children
-  await upsertPageTree({
-    spaceKey,
-    spaceName: `${owner}/${repo} Docs`,
-    spaceDesc: `RepoMind automated docs for ${owner}/${repo} @ ${commitSha}`,
-    rootTitle: "Repository Documentation",
-    pages
-  });
+function toTitleCase(str: string) {
+  return str
+    .split(/[-_ ]+/) // split on dash, underscore, or space
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(" ");
 }
 
 async function queueIngest(opts: {
@@ -141,7 +121,6 @@ async function queueIngest(opts: {
         embedder,
         batchSize: 64,
         partSize: 2000,
-        // stream into Postgres while generating
         onBatchVectors: async (rows) => {
           await insertEmbeddings(embedder.name, embedder.dim, rows);
         },
@@ -149,44 +128,37 @@ async function queueIngest(opts: {
 
       console.log(`🧠 Embeddings complete → ${embedResult.total} vectors (provider=${embedResult.provider})`);
 
-      // 4) DOCS (auto-generate local Markdown pages)
-      // Requires OPENAI_API_KEY (used to embed the queries and write the markdown)
+      // 4) DOCS → generate in memory and publish to Confluence
       try {
         if (!process.env.OPENAI_API_KEY) {
-          console.warn("⚠️ Skipping docs generation: OPENAI_API_KEY is not set.");
+          console.warn("Skipping docs generation: OPENAI_API_KEY is not set.");
         } else {
-          const { outDir } = await generateDocsLocal({
+          const pages = await generateDocsPages({
             owner,
             repo,
             commit: commitSha,
             tenantId: tenantId ?? "default",
-            bucket: process.env.S3_BUCKET_NAME,     // lets the generator pull snippet text from S3
-            sections: DEFAULT_SECTIONS,             // architecture, controllers, routes, services, etc.
-            // Optional tuning:
-            // outDir: path.join(process.cwd(), "generated-docs", `${owner}_${repo}_${commitSha.slice(0,7)}`),
-            // capSnippetChars: 2500,
+            bucket: process.env.S3_BUCKET_NAME,
+            sections: DEFAULT_SECTIONS,
           });
 
-          // 5) PUBLISH (Confluence)
-            try {
-              // sanity check: only publish if we have an output folder
-              if (outDir) {
-                await publishGeneratedDocs(owner, repo, commitSha, outDir);
-                console.log(`🚀 Published docs to Confluence for ${owner}/${repo} @ ${commitSha}`);
-              } else {
-                console.warn("⚠️ No outDir returned by docs generator; skipping Confluence publish.");
-              }
-            } catch (e) {
-              console.error("❌ Confluence publish failed:", e);
-            }
+          // build a stable spaceKey and publish
+          const spaceKey = (owner + "_" + repo).toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 20);
+          await upsertPageTree({
+            spaceKey,
+            spaceName: `${toTitleCase(repo)} Docs`, // ← every word capitalized
+            spaceDesc: `RepoMind automated docs for ${owner}/${repo} @ ${commitSha}`,
+            rootTitle: "Code Base Documentation",
+            pages,
+          });
 
-          console.log(`📚 Docs generated → ${outDir}`);
+          console.log(`🚀 Published docs to Confluence for ${owner}/${repo} @ ${commitSha}`);
         }
       } catch (e) {
-        console.error("❌ Docs generation failed:", e);
+        console.error("❌ Docs generation/publish failed:", e);
       }
     } catch (err) {
-      console.error(`❌ Ingest/Parse/Embed failed for ${owner}/${repo} @ ${commit}`, err);
+      console.error(`❌ Ingest/Parse/Embed/Publish failed for ${owner}/${repo} @ ${commit}`, err);
     }
   });
 }
