@@ -149,8 +149,14 @@ async function queueIngest(opts: {
             spaceDesc: `RepoMind automated docs for ${owner}/${repo} @ ${commitSha}`,
             rootTitle: "Code Base Documentation",
             pages,
-          });
-          
+          },
+          {
+            deleteMissing: true,          // ✅ turn on cleanup
+            ignoreTitles: [],             // (optional) add titles you never want deleted
+            dryRun: false,                // set true to see logs first without changes
+          }
+        );
+
           console.log("🚀 Published docs to Confluence", {
             spaceId: publishResult.spaceId,
             rootId: publishResult.rootId,

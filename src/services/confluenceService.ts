@@ -78,3 +78,34 @@ export async function updatePage(pageId: string, newTitle: string, storageHtml: 
   };
   return (await cf.put(`/content/${pageId}`, body)).data;
 }
+
+// List all pages in a space (flat, paginated)
+export async function listPagesInSpace(spaceKey: string) {
+  const pages: any[] = [];
+  let start = 0;
+  const limit = 50;
+
+  while (true) {
+    const r = await cf.get(`/content`, {
+      params: {
+        spaceKey,
+        type: "page",
+        status: "current",     // only live pages
+        expand: "version",
+        limit,
+        start,
+      },
+    });
+    pages.push(...(r.data?.results || []));
+    if (!r.data?._links?.next) break;
+    start += limit;
+  }
+  return pages;
+}
+
+// Soft-delete (move to Trash)
+export async function movePageToTrash(pageId: string) {
+  // Confluence Cloud REST v1: DELETE /content/{id} moves the page to trash
+  await cf.delete(`/content/${pageId}`);
+  return pageId;
+}

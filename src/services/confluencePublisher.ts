@@ -1,6 +1,12 @@
 // confluencePublisher.ts (or wherever you put these helpers)
 
-import { getSpaceByKey, createSpace, getPageByTitle, createPage, updatePage } from "./confluenceService";
+import { getSpaceByKey, createSpace, getPageByTitle, createPage, updatePage, movePageToTrash, listPagesInSpace } from "./confluenceService";
+
+type UpsertOptions = {
+  deleteMissing?: boolean;     // default false
+  ignoreTitles?: string[];     // titles never delete (e.g., root)
+  dryRun?: boolean;            // log only
+};
 
 export function normalizeSpaceKey(input: string) {
   // Uppercase alnum, must start with a letter, length 2..255
@@ -57,36 +63,56 @@ export async function ensureSpace({ key, name, description }: { key: string; nam
   }
 }
 
-export async function upsertPageTree(opts: {
-  spaceKey: string; spaceName: string; spaceDesc?: string;
-  rootTitle: string; pages: { title: string; html: string }[];
-}) {
-  const space = await ensureSpace({ key: opts.spaceKey, name: opts.spaceName, description: opts.spaceDesc });
-  const spaceId = space.id;
+export async function upsertPageTree(
+  opts: {
+    spaceKey: string; spaceName: string; spaceDesc?: string;
+    rootTitle: string; pages: { title: string; html: string }[];
+  },
+  options: UpsertOptions = {}
+) {
+  const { deleteMissing = false, ignoreTitles = [], dryRun = false } = options;
 
-  // ensure root page
-  const rootExisting = await getPageByTitle(space.key || opts.spaceKey, opts.rootTitle);
+  const space = await ensureSpace({ key: opts.spaceKey, name: opts.spaceName, description: opts.spaceDesc });
+  const spaceKey = space.key || opts.spaceKey;
+
+  // Ensure root page exists
+  const rootExisting = await getPageByTitle(spaceKey, opts.rootTitle);
   let root;
   if (rootExisting) {
     console.log(`📝 Updating existing root page: "${opts.rootTitle}" (id=${rootExisting.id})`);
     const currentHtml = rootExisting.body?.storage?.value ?? "<p>Updated root</p>";
-    root = await updatePage(rootExisting.id, opts.rootTitle, currentHtml);
+    root = dryRun ? rootExisting : await updatePage(rootExisting.id, opts.rootTitle, currentHtml);
   } else {
     console.log(`📄 Creating root page: "${opts.rootTitle}"`);
-    root = await createPage(space.key || opts.spaceKey, opts.rootTitle, "<p>RepoMind root</p>");
+    root = dryRun ? { id: "DRY_RUN" } : await createPage(spaceKey, opts.rootTitle, "<p>RepoMind root</p>");
   }
 
-  // children
+  // Create / Update children
   for (const p of opts.pages) {
-    const existing = await getPageByTitle(space.key || opts.spaceKey, p.title);
+    const existing = await getPageByTitle(spaceKey, p.title);
     if (existing) {
       console.log(`🔁 Updating page: "${p.title}" (id=${existing.id})`);
-      await updatePage(existing.id, p.title, p.html);
+      if (!dryRun) await updatePage(existing.id, p.title, p.html);
     } else {
       console.log(`➕ Creating page: "${p.title}" (parent=${root.id})`);
-      await createPage(space.key || opts.spaceKey, p.title, p.html, root.id);
+      if (!dryRun) await createPage(spaceKey, p.title, p.html, root.id);
     }
   }
 
-  return { spaceId, rootId: root.id };
+  // Optional cleanup: delete pages not present in the new set
+  if (deleteMissing) {
+    const desiredTitles = new Set([opts.rootTitle, ...opts.pages.map(p => p.title)]);
+    for (const t of ignoreTitles) desiredTitles.add(t);
+
+    const existingPages = await listPagesInSpace(spaceKey);
+    for (const ep of existingPages) {
+      const title: string = ep.title || "";
+      if (!desiredTitles.has(title)) {
+        console.log(`🗑️ Removing stale page: "${title}" (id=${ep.id})`);
+        if (!dryRun) await movePageToTrash(ep.id);
+      }
+    }
+  }
+
+  return { spaceId: space.id, rootId: root.id };
 }
