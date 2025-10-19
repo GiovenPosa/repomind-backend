@@ -11,6 +11,10 @@ import { embedCommit } from "../services/embedService";
 import { saveCommitRow, upsertChunks, insertEmbeddings } from "../services/indexerService";
 import { DEFAULT_SECTIONS } from "../types/docs";
 import { generateDocsLocal } from "../services/documentationService";
+import { promises as fs } from "fs";
+import * as path from "path";
+import { marked } from "marked";
+import { upsertPageTree } from "../services/confluencePublisher"; // low-level calls live there
 
 // one S3 client for the process
 const s3 = new S3Client({
@@ -56,6 +60,33 @@ function buildLayout(tenantId: string | undefined, owner: string, repo: string, 
 function cleanBranch(ref?: string) {
   if (!ref) return undefined;
   return ref.replace(/^refs\/heads\//, "");
+}
+
+// ADD: publish helper (kept local for now; you can move it to services later)
+async function publishGeneratedDocs(owner: string, repo: string, commitSha: string, outDir: string) {
+  // gather .md files → html pages
+  const files = await fs.readdir(outDir);
+  const mdFiles = files.filter(f => f.endsWith(".md"));
+  const pages: { title: string; html: string }[] = [];
+
+  for (const f of mdFiles) {
+    const md = await fs.readFile(path.join(outDir, f), "utf8");
+    const html = String(await marked.parse(md)); // ← await makes it a string
+    const title = f.replace(/\.md$/i, "").replace(/[-_]/g, " ");
+    pages.push({ title, html });
+  }
+
+  // stable, idempotent space key per repo
+  const spaceKey = (owner + "_" + repo).toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 20);
+
+  // create/ensure space + root page, then upsert children
+  await upsertPageTree({
+    spaceKey,
+    spaceName: `${owner}/${repo} Docs`,
+    spaceDesc: `RepoMind automated docs for ${owner}/${repo} @ ${commitSha}`,
+    rootTitle: "Repository Documentation",
+    pages
+  });
 }
 
 async function queueIngest(opts: {
@@ -135,6 +166,19 @@ async function queueIngest(opts: {
             // outDir: path.join(process.cwd(), "generated-docs", `${owner}_${repo}_${commitSha.slice(0,7)}`),
             // capSnippetChars: 2500,
           });
+
+          // 5) PUBLISH (Confluence)
+            try {
+              // sanity check: only publish if we have an output folder
+              if (outDir) {
+                await publishGeneratedDocs(owner, repo, commitSha, outDir);
+                console.log(`🚀 Published docs to Confluence for ${owner}/${repo} @ ${commitSha}`);
+              } else {
+                console.warn("⚠️ No outDir returned by docs generator; skipping Confluence publish.");
+              }
+            } catch (e) {
+              console.error("❌ Confluence publish failed:", e);
+            }
 
           console.log(`📚 Docs generated → ${outDir}`);
         }
