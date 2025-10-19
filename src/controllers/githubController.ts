@@ -1,8 +1,6 @@
 import { Request, Response } from "express";
 import crypto from 'crypto';
-import * as dotenv from 'dotenv';
-dotenv.config(); // ← load env first
-
+import * as dotenv from 'dotenv';dotenv.config(); // ← load env first
 import { S3Client } from "@aws-sdk/client-s3";
 import { getJson, s3Prefix as prefix } from "../utils/s3Util";
 import type { ChunkIndex } from "../types/parser";
@@ -13,7 +11,6 @@ import { embedCommit } from "../services/embedService";
 import { saveCommitRow, upsertChunks, insertEmbeddings } from "../services/indexerService";
 import { DEFAULT_SECTIONS } from "../types/docs";
 import { generateDocsLocal } from "../services/documentationService";
-
 
 // one S3 client for the process
 const s3 = new S3Client({
@@ -82,7 +79,7 @@ async function queueIngest(opts: {
       const commitSha = manifest.commit;
       console.log(`✅ Ingest complete for ${owner}/${repo} @ ${commitSha}`);
 
-      // ✅ DB: commit row
+      // DB: commit row
       await saveCommitRow(manifest);
 
       // 2) PARSE
@@ -93,7 +90,7 @@ async function queueIngest(opts: {
       });
       console.log(`🧩 Parse complete → s3://${process.env.S3_BUCKET_NAME}/.../parse/`);
 
-      // ✅ DB: chunk metadata
+      // DB: chunk metadata
       const idxKey = `${prefix({ tenantId: tenantId ?? "default", owner, repo })}commits/${commitSha}/parse/chunks.index.json`;      const index = await getJson<ChunkIndex>(s3, process.env.S3_BUCKET_NAME!, idxKey);
       await upsertChunks(owner, repo, commitSha, index.chunks);
 
@@ -113,7 +110,7 @@ async function queueIngest(opts: {
         embedder,
         batchSize: 64,
         partSize: 2000,
-        // ⬇️ stream into Postgres while generating
+        // stream into Postgres while generating
         onBatchVectors: async (rows) => {
           await insertEmbeddings(embedder.name, embedder.dim, rows);
         },
