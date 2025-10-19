@@ -11,6 +11,8 @@ import { parseCommit } from "../services/parserService";
 import { OpenAIEmbedder } from "../ai/adapters/openaiEmbedder";
 import { embedCommit } from "../services/embedService";
 import { saveCommitRow, upsertChunks, insertEmbeddings } from "../services/indexerService";
+import { DEFAULT_SECTIONS } from "../types/docs";
+import { generateDocsLocal } from "../services/documentationService";
 
 
 // one S3 client for the process
@@ -119,6 +121,29 @@ async function queueIngest(opts: {
 
       console.log(`🧠 Embeddings complete → ${embedResult.total} vectors (provider=${embedResult.provider})`);
 
+      // 4) DOCS (auto-generate local Markdown pages)
+      // Requires OPENAI_API_KEY (used to embed the queries and write the markdown)
+      try {
+        if (!process.env.OPENAI_API_KEY) {
+          console.warn("⚠️ Skipping docs generation: OPENAI_API_KEY is not set.");
+        } else {
+          const { outDir } = await generateDocsLocal({
+            owner,
+            repo,
+            commit: commitSha,
+            tenantId: tenantId ?? "default",
+            bucket: process.env.S3_BUCKET_NAME,     // lets the generator pull snippet text from S3
+            sections: DEFAULT_SECTIONS,             // architecture, controllers, routes, services, etc.
+            // Optional tuning:
+            // outDir: path.join(process.cwd(), "generated-docs", `${owner}_${repo}_${commitSha.slice(0,7)}`),
+            // capSnippetChars: 2500,
+          });
+
+          console.log(`📚 Docs generated → ${outDir}`);
+        }
+      } catch (e) {
+        console.error("❌ Docs generation failed:", e);
+      }
     } catch (err) {
       console.error(`❌ Ingest/Parse/Embed failed for ${owner}/${repo} @ ${commit}`, err);
     }
