@@ -7,7 +7,12 @@ import { inferCategory } from "../types/docs";
 import type { DocSectionSpec, DocCategory } from "../types/docs";
 import type { Generator } from "../ai/interfaces";
 import OpenAI from "openai";
-import { marked } from "marked";
+
+type MarkedNS = typeof import("marked");
+let _markedNS: Promise<MarkedNS> | null = null;
+function getMarked() {
+  return (_markedNS ??= import("marked"));
+}
 
 // small helper to embed queries without coupling to your controller
 async function embedQuery(q: string): Promise<number[]> {
@@ -203,7 +208,8 @@ export async function generateDocsPages(opts: {
       generator
     });
 
-    const html = String(await marked.parse(md));
+    const { marked } = await getMarked();
+    const html = String(marked.parse(md));  
     pages.push({ title: sec.title, html });
   }
 
