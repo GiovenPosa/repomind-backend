@@ -34,9 +34,10 @@ const chunkTextLoader_1 = require("./chunkTextLoader");
 const openaiGenerator_1 = require("../ai/adapters/openaiGenerator");
 const docs_1 = require("../types/docs");
 const openai_1 = __importDefault(require("openai"));
+const importEsm_1 = require("../utils/importEsm"); // 👈 add this near the top
 let _markedNS = null;
 function getMarked() {
-    return (_markedNS ?? (_markedNS = Promise.resolve().then(() => __importStar(require("marked")))));
+    return (_markedNS ?? (_markedNS = (0, importEsm_1.importEsm)("marked")));
 }
 async function renderMarkdown(md) {
     const { marked } = await getMarked();

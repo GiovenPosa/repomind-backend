@@ -24,13 +24,14 @@ var __importStar = (this && this.__importStar) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ingestRepository = void 0;
+const importEsm_1 = require("../utils/importEsm");
 const fs_1 = require("fs");
 const crypto_1 = require("crypto");
 const s3Util_1 = require("../utils/s3Util");
 const parserUtil_1 = require("../utils/parserUtil");
 let _minimatchNS = null;
 async function getMinimatch() {
-    return (_minimatchNS ?? (_minimatchNS = await Promise.resolve().then(() => __importStar(require("minimatch")))));
+    return (_minimatchNS ?? (_minimatchNS = await (0, importEsm_1.importEsm)("minimatch")));
 }
 let _s3ns = null;
 async function getS3NS() {
@@ -204,11 +205,9 @@ function sanitizeBranchName(name) {
     return name.replace(/^refs\/heads\//, "");
 }
 async function getOctokit({ installationId }) {
-    const { Octokit } = await Promise.resolve().then(() => __importStar(require("@octokit/rest")));
-    if (installationId &&
-        process.env.GITHUB_APP_ID &&
-        (process.env.GITHUB_PRIVATE_KEY || process.env.GITHUB_PRIVATE_KEY_PATH)) {
-        const { createAppAuth } = await Promise.resolve().then(() => __importStar(require("@octokit/auth-app")));
+    const { Octokit } = await (0, importEsm_1.importEsm)("@octokit/rest");
+    if (installationId && process.env.GITHUB_APP_ID && (process.env.GITHUB_PRIVATE_KEY || process.env.GITHUB_PRIVATE_KEY_PATH)) {
+        const { createAppAuth } = await (0, importEsm_1.importEsm)("@octokit/auth-app");
         const pkRaw = process.env.GITHUB_PRIVATE_KEY ??
             (0, fs_1.readFileSync)(process.env.GITHUB_PRIVATE_KEY_PATH, "utf8");
         const privateKey = pkRaw.includes("\\n") ? pkRaw.replace(/\\n/g, "\n") : pkRaw;
@@ -222,9 +221,9 @@ async function getOctokit({ installationId }) {
         });
     }
     if (process.env.GITHUB_TOKEN) {
-        const { Octokit } = await Promise.resolve().then(() => __importStar(require("@octokit/rest")));
+        const { Octokit } = await (0, importEsm_1.importEsm)("@octokit/rest");
         return new Octokit({ auth: process.env.GITHUB_TOKEN });
     }
-    const { Octokit: OctokitNoAuth } = await Promise.resolve().then(() => __importStar(require("@octokit/rest")));
+    const { Octokit: OctokitNoAuth } = await (0, importEsm_1.importEsm)("@octokit/rest");
     return new OctokitNoAuth();
 }

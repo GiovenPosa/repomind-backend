@@ -1,7 +1,7 @@
 // --- type-only imports (safe in CJS) ---
 import type { Octokit as OctokitType } from "@octokit/rest";
 import type { S3Client as S3ClientType } from "@aws-sdk/client-s3";
-
+import { importEsm } from "../utils/importEsm";
 import { readFileSync } from "fs";
 import { createHash } from "crypto";
 
@@ -30,7 +30,7 @@ import { guessLang } from "../utils/parserUtil";
 type MinimatchNS = typeof import("minimatch");
 let _minimatchNS: MinimatchNS | null = null;
 async function getMinimatch() {
-  return (_minimatchNS ??= await import("minimatch"));
+  return (_minimatchNS ??= await importEsm<MinimatchNS>("minimatch"));
 }
 
 type S3NS = typeof import("@aws-sdk/client-s3");
@@ -250,15 +250,13 @@ function sanitizeBranchName(name?: string): string | undefined {
   return name.replace(/^refs\/heads\//, "");
 }
 
-async function getOctokit({ installationId }: { installationId?: number }): Promise<OctokitType> {
-  const { Octokit } = await import("@octokit/rest");
+async function getOctokit({ installationId }: { installationId?: number }) {
+  const { Octokit } =
+    await importEsm<typeof import("@octokit/rest")>("@octokit/rest");
 
-  if (
-    installationId &&
-    process.env.GITHUB_APP_ID &&
-    (process.env.GITHUB_PRIVATE_KEY || process.env.GITHUB_PRIVATE_KEY_PATH)
-  ) {
-    const { createAppAuth } = await import("@octokit/auth-app");
+  if (installationId && process.env.GITHUB_APP_ID && (process.env.GITHUB_PRIVATE_KEY || process.env.GITHUB_PRIVATE_KEY_PATH)) {
+    const { createAppAuth } =
+      await importEsm<typeof import("@octokit/auth-app")>("@octokit/auth-app");
     const pkRaw =
       process.env.GITHUB_PRIVATE_KEY ??
       readFileSync(process.env.GITHUB_PRIVATE_KEY_PATH!, "utf8");
@@ -275,10 +273,12 @@ async function getOctokit({ installationId }: { installationId?: number }): Prom
   }
 
   if (process.env.GITHUB_TOKEN) {
-    const { Octokit } = await import("@octokit/rest");
-    return new Octokit({ auth: process.env.GITHUB_TOKEN }) as unknown as OctokitType;
+    const { Octokit } =
+      await importEsm<typeof import("@octokit/rest")>("@octokit/rest");
+    return new Octokit({ auth: process.env.GITHUB_TOKEN }) as any;
   }
 
-  const { Octokit: OctokitNoAuth } = await import("@octokit/rest");
-  return new OctokitNoAuth() as unknown as OctokitType;
+  const { Octokit: OctokitNoAuth } =
+    await importEsm<typeof import("@octokit/rest")>("@octokit/rest");
+  return new OctokitNoAuth() as any;
 }

@@ -7,11 +7,13 @@ import { inferCategory } from "../types/docs";
 import type { DocSectionSpec, DocCategory } from "../types/docs";
 import type { Generator } from "../ai/interfaces";
 import OpenAI from "openai";
+import { importEsm } from "../utils/importEsm"; // 👈 add this near the top
 
 type MarkedNS = typeof import("marked");
 let _markedNS: Promise<MarkedNS> | null = null;
+
 function getMarked() {
-  return (_markedNS ??= import("marked"));
+  return (_markedNS ??= importEsm<MarkedNS>("marked"));
 }
 
 async function renderMarkdown(md: string): Promise<string> {
