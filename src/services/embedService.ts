@@ -1,6 +1,5 @@
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import type { S3IngestLayout, ManifestJson, ManifestFileEntry } from "../types/s3";
-import type { ChunkRecord } from "../types/parser";
 import { Embedder } from "../ai/interfaces";
 
 import {
