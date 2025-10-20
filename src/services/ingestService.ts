@@ -1,5 +1,4 @@
-import { Octokit } from "@octokit/rest";
-import { createAppAuth } from "@octokit/auth-app";
+import type { Octokit as OctokitType } from "@octokit/rest";
 import { readFileSync } from "fs";
 import { Minimatch } from 'minimatch';
 import { createHash } from 'crypto';
@@ -216,13 +215,13 @@ export async function ingestRepository(params: {
 
 /* ------------------------ helpers ------------------------ */
 
-async function resolveToCommitSha(octokit: Octokit, owner: string, repo: string, ref: string) {
+async function resolveToCommitSha(octokit: OctokitType, owner: string, repo: string, ref: string) {
   if (/^[0-9a-f]{40}$/i.test(ref)) return ref;
   const { data } = await octokit.repos.getCommit({ owner, repo, ref });
   return data.sha;
 }
 
-async function resolveTreeShaForCommit(octokit: Octokit, owner: string, repo: string, commitSha: string) {
+async function resolveTreeShaForCommit(octokit: OctokitType, owner: string, repo: string, commitSha: string) {
   const { data } = await octokit.repos.getCommit({ owner, repo, ref: commitSha });
   return (data as any).commit?.tree?.sha;
 }
@@ -243,15 +242,17 @@ function sanitizeBranchName(name?: string): string | undefined {
 }
 
 async function getOctokit({ installationId }: { installationId?: number }) {
+  const { Octokit } = await import("@octokit/rest");
+
   if (
     installationId &&
     process.env.GITHUB_APP_ID &&
     (process.env.GITHUB_PRIVATE_KEY || process.env.GITHUB_PRIVATE_KEY_PATH)
   ) {
+    const { createAppAuth } = await import("@octokit/auth-app");
     const pkRaw =
       process.env.GITHUB_PRIVATE_KEY ??
       readFileSync(process.env.GITHUB_PRIVATE_KEY_PATH!, "utf8");
-
     const privateKey = pkRaw.includes("\\n") ? pkRaw.replace(/\\n/g, "\n") : pkRaw;
 
     return new Octokit({
@@ -265,8 +266,8 @@ async function getOctokit({ installationId }: { installationId?: number }) {
   }
 
   if (process.env.GITHUB_TOKEN) {
-    return new Octokit({ auth: process.env.GITHUB_TOKEN });
+    return new (await import("@octokit/rest")).Octokit({ auth: process.env.GITHUB_TOKEN });
   }
 
-  return new Octokit();
+  return new (await import("@octokit/rest")).Octokit();
 }
