@@ -14,6 +14,11 @@ function getMarked() {
   return (_markedNS ??= import("marked"));
 }
 
+async function renderMarkdown(md: string): Promise<string> {
+  const { marked } = await getMarked();
+  return String(marked.parse(md));
+}
+
 // small helper to embed queries without coupling to your controller
 async function embedQuery(q: string): Promise<number[]> {
   const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY! });
@@ -208,8 +213,7 @@ export async function generateDocsPages(opts: {
       generator
     });
 
-    const { marked } = await getMarked();
-    const html = String(marked.parse(md));  
+    const html = await renderMarkdown(md);
     pages.push({ title: sec.title, html });
   }
 
