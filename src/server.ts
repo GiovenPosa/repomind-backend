@@ -4,7 +4,8 @@ import apiRoutes from './routes/index';
 import bodyParser from 'body-parser'; // ⬅️ add this
 
 const server = express();
-const PORT = process.env.PORT || 3000;
+const PORT = Number(process.env.PORT) || 3000;
+const HOST = process.env.HOST || '0.0.0.0'; // bind to all interfaces in containers
 
 server.use(cors({
   origin: '*',
@@ -62,7 +63,7 @@ server.use('*', (req, res) => {
   });
 });
 
-server.listen(PORT, () => {
-  console.log(`Server is running on http://localhost:${PORT}`);
-  console.log(`Health check available at http://localhost:${PORT}/api/health`);
+server.listen(PORT, HOST, () => {
+  console.log(`Server listening on http://${HOST}:${PORT}`);
+  console.log(`Health check: /api/health`);
 });
