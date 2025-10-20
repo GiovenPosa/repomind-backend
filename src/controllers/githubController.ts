@@ -65,8 +65,9 @@ async function queueIngest(opts: {
   commit: string;
   branch?: string;
   tenantId?: string;
+  installationId?: number;   // <-- add
 }) {
-  const { owner, repo, commit, branch, tenantId } = opts;
+  const { owner, repo, commit, branch, tenantId, installationId } = opts;
   setImmediate(async () => {
     try {
       const cfg = buildCfg();
@@ -76,6 +77,7 @@ async function queueIngest(opts: {
         owner, repo, commit, branch, cfg, s3,
         layout: buildLayout(tenantId, owner, repo, commit),
         dryRun: false, saveTarball: true,
+        installationId,          
       });
       const commitSha = manifest.commit;
       console.log(`✅ Ingest complete for ${owner}/${repo} @ ${commitSha}`);
@@ -200,6 +202,9 @@ interface RepositoryEvent {
   };
   sender: {
     login: string;
+    id: number;
+  };
+   installation?: {
     id: number;
   };
 }
@@ -463,15 +468,18 @@ export class GitHubController {
       console.log('\n✅ Repository added to tracking system');
 
       // Kick off an initial ingest (if repo has a default branch / content)
+
       try {
         const owner = payload.repository.owner.login;
         const repo = payload.repository.name;
         const defaultBranch = payload.repository.default_branch || "main";
+        const installationId = payload.installation?.id;
         queueIngest({
           owner,
           repo,
-          commit: defaultBranch,         // service resolves to SHA
-          branch: defaultBranch          // writes refs/branches/{branch}.json
+          commit: defaultBranch,
+          branch: defaultBranch,
+          installationId,
         });
       } catch (e) {
         console.warn("⚠️ Initial ingest attempt failed (likely empty repo):", e instanceof Error ? e.message : e);
@@ -524,6 +532,7 @@ export class GitHubController {
       const repo  = payload.repository?.name;
       const commitSha = payload.after || payload.head_commit?.id; // head SHA
       const branch = cleanBranch(payload.ref); // "main"
+      const installationId = payload.installation?.id;
 
       if (!owner || !repo || !commitSha) {
         console.warn('⚠️ Missing owner/repo/commitSha in push payload; skipping ingest.');
@@ -533,8 +542,10 @@ export class GitHubController {
       queueIngest({
         owner,
         repo,
-        commit: commitSha,  // snapshot this commit
-        branch              // write refs/branches/{branch}.json
+        commit: commitSha,
+        branch,
+        tenantId: undefined,
+        installationId,         
       });
     } catch (e) {
       console.error('❌ Failed to queue ingest for push:', e);

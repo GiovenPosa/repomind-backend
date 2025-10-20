@@ -1,4 +1,6 @@
-import { Octokit } from '@octokit/rest';
+import { Octokit } from "@octokit/rest";
+import { createAppAuth } from "@octokit/auth-app";
+import { readFileSync } from "fs";
 import { Minimatch } from 'minimatch';
 import { createHash } from 'crypto';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
@@ -44,16 +46,42 @@ export async function ingestRepository(params: {
   } = params;
 
   const octokit = await getOctokit({ installationId });
+
+  try {
+    const { data: repoInfo } = await octokit.repos.get({ owner, repo });
+    console.log("🔎 GitHub access OK", {
+      owner: repoInfo.owner?.login,
+      repo: repoInfo.name,
+      private: repoInfo.private,
+      using: installationId ? "installation-token" : (process.env.GITHUB_TOKEN ? "PAT" : "unauthenticated"),
+    });
+  } catch (e: any) {
+    console.error("⛔ Cannot access repo with current credentials", {
+      owner, repo,
+      using: installationId ? "installation-token" : (process.env.GITHUB_TOKEN ? "PAT" : "unauthenticated"),
+      status: e?.status, message: e?.message,
+    });
+    throw e;
+  }
   const commitSha = await resolveToCommitSha(octokit, owner, repo, commit);
 
-  // 1) list tree (recursive)
+  // 1) list tree (recursive) — use the *tree* SHA, not the commit SHA
+  const treeSha = await resolveTreeShaForCommit(octokit, owner, repo, commitSha);
+
   const treeResp = await octokit.git.getTree({
-    owner, repo, tree_sha: commitSha, recursive: '1'
+    owner,
+    repo,
+    tree_sha: treeSha,
+    recursive: "1" as any, // GitHub API expects "1"
   });
-  const tree = treeResp.data as unknown as GitTreeResponse;
+
+  // keep 'tree' and 'truncated' in scope for later usage
+  const tree = treeResp.data as unknown as GitTreeResponse & { truncated?: boolean };
   const truncated = (tree as any).truncated === true;
 
-  const blobs = (tree.tree ?? []).filter(i => i.type === 'blob') as GitTreeItem[];
+  // Strongly type the items so noImplicitAny is happy
+  const blobs = (tree.tree ?? [])
+    .filter((i: any): i is GitTreeItem => i.type === "blob");
 
   // 2) precompile matchers
   const includeMatchers = cfg.include.map(p => new Minimatch(p, { dot: true }));
@@ -189,9 +217,14 @@ export async function ingestRepository(params: {
 /* ------------------------ helpers ------------------------ */
 
 async function resolveToCommitSha(octokit: Octokit, owner: string, repo: string, ref: string) {
-  if (/^[0-9a-f]{40}$/i.test(ref)) return ref; // already a full SHA
+  if (/^[0-9a-f]{40}$/i.test(ref)) return ref;
   const { data } = await octokit.repos.getCommit({ owner, repo, ref });
   return data.sha;
+}
+
+async function resolveTreeShaForCommit(octokit: Octokit, owner: string, repo: string, commitSha: string) {
+  const { data } = await octokit.repos.getCommit({ owner, repo, ref: commitSha });
+  return (data as any).commit?.tree?.sha;
 }
 
 function toBlobKey(sha256: string) {
@@ -210,11 +243,30 @@ function sanitizeBranchName(name?: string): string | undefined {
 }
 
 async function getOctokit({ installationId }: { installationId?: number }) {
-  // For quick testing, prefer a PAT in env (GITHUB_TOKEN with Contents:Read)
-  if (process.env.GITHUB_TOKEN) return new Octokit({ auth: process.env.GITHUB_TOKEN });
-  // If you want GitHub App auth here, plug your installation token minting logic.
-  if (installationId) {
-    throw new Error('Installation auth not wired in this helper. Use GITHUB_TOKEN for now.');
+  if (
+    installationId &&
+    process.env.GITHUB_APP_ID &&
+    (process.env.GITHUB_PRIVATE_KEY || process.env.GITHUB_PRIVATE_KEY_PATH)
+  ) {
+    const pkRaw =
+      process.env.GITHUB_PRIVATE_KEY ??
+      readFileSync(process.env.GITHUB_PRIVATE_KEY_PATH!, "utf8");
+
+    const privateKey = pkRaw.includes("\\n") ? pkRaw.replace(/\\n/g, "\n") : pkRaw;
+
+    return new Octokit({
+      authStrategy: createAppAuth,
+      auth: {
+        appId: process.env.GITHUB_APP_ID!,
+        privateKey,
+        installationId,
+      },
+    });
   }
-  return new Octokit(); // unauth (public repos only)
+
+  if (process.env.GITHUB_TOKEN) {
+    return new Octokit({ auth: process.env.GITHUB_TOKEN });
+  }
+
+  return new Octokit();
 }
