@@ -8,7 +8,7 @@ const openai_1 = __importDefault(require("openai"));
 class OpenAIGenerator {
     constructor(opts) {
         this.client = new openai_1.default({ apiKey: opts?.apiKey ?? process.env.OPENAI_API_KEY });
-        this.model = opts?.model ?? process.env.OPENAI_CHAT_MODEL ?? "gpt-4o-mini";
+        this.model = opts?.model ?? process.env.OPENAI_CHAT_MODEL ?? "gpt-5.1";
     }
     async generate(prompt, opts) {
         const res = await this.client.chat.completions.create({

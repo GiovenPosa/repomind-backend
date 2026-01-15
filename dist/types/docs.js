@@ -6,7 +6,7 @@ exports.DEFAULT_SECTIONS = [
         id: "architecture",
         title: "System Architecture",
         outFile: "architecture.md",
-        topK: 32,
+        topK: 100,
         category: "architecture",
         queries: [
             "overall system architecture and interactions between modules",
@@ -20,13 +20,13 @@ exports.DEFAULT_SECTIONS = [
             "RAG-style retrieval flow if present (ingest → parse → embed → store → query → generate)"
         ],
         hint: "Include relevant Mermaid diagram(s): system context, component, sequence, and (if applicable) deployment. " +
-            "Infer only from snippets; don’t invent components. Prefer citing concrete files/functions."
+            "Infer only from snippets; don't invent components. Prefer citing concrete files/functions."
     },
     {
         id: "controllers",
         title: "Controllers",
         outFile: "controllers.md",
-        topK: 28,
+        topK: 100,
         category: "controllers",
         queries: [
             "express controller handler functions and their responsibilities",
@@ -41,7 +41,7 @@ exports.DEFAULT_SECTIONS = [
         id: "routes",
         title: "Routes & Endpoints",
         outFile: "routes.md",
-        topK: 28,
+        topK: 100,
         category: "routes",
         queries: [
             "all express routes and methods with full paths",
@@ -49,15 +49,18 @@ exports.DEFAULT_SECTIONS = [
             "request body schema and content-type for each route",
             "authentication and middleware requirements for endpoints",
             "response status codes and payload shapes for endpoints",
-            "examples of 200 responses and common error responses with codes"
+            "examples of 200 responses and common error responses with codes",
+            "controller functions called by routes and their implementations",
+            "route handler implementations and their parameter validation",
+            "controller methods referenced in route definitions"
         ],
-        hint: "Document EVERY endpoint with method, full path, auth/middleware, params (path/query/body), content-type, response schema, 200 example, and error catalogue (status, message, when)."
+        hint: "Document EVERY endpoint with method, full path, auth/middleware, params (path/query/body), content-type, response schema, 200 example, and error catalogue (status, message, when). CRITICAL: For each route, trace to the controller implementation to extract actual parameter validation, request schema, and response types. Follow the call chain from route definition → controller handler → services called."
     },
     {
         id: "services",
         title: "Services",
         outFile: "services.md",
-        topK: 28,
+        topK: 100,
         category: "services",
         queries: [
             "service modules and business logic in the codebase",
@@ -74,7 +77,7 @@ exports.DEFAULT_SECTIONS = [
         id: "utils",
         title: "Utilities",
         outFile: "utils.md",
-        topK: 16,
+        topK: 60,
         category: "utils",
         queries: [
             "utility helpers, key functions and contracts",
@@ -84,7 +87,7 @@ exports.DEFAULT_SECTIONS = [
         id: "types",
         title: "Types & Interfaces",
         outFile: "types.md",
-        topK: 16,
+        topK: 60,
         category: "types",
         queries: [
             "shared type definitions and interfaces used across modules",
@@ -94,7 +97,7 @@ exports.DEFAULT_SECTIONS = [
         id: "database",
         title: "Database Schema",
         outFile: "database.md",
-        topK: 16,
+        topK: 60,
         category: "database",
         queries: [
             "postgres schema, tables and indexes used by the app",
@@ -105,7 +108,7 @@ exports.DEFAULT_SECTIONS = [
         id: "external-apis",
         title: "External APIs",
         outFile: "external-apis.md",
-        topK: 16,
+        topK: 60,
         category: "external-apis",
         queries: [
             "usage of external apis including rate limits and auth",

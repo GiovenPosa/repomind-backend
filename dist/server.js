@@ -8,7 +8,8 @@ const cors_1 = __importDefault(require("cors"));
 const index_1 = __importDefault(require("./routes/index"));
 const body_parser_1 = __importDefault(require("body-parser")); // ⬅️ add this
 const server = (0, express_1.default)();
-const PORT = process.env.PORT || 3000;
+const PORT = Number(process.env.PORT) || 3000;
+const HOST = process.env.HOST || '0.0.0.0'; // bind to all interfaces in containers
 server.use((0, cors_1.default)({
     origin: '*',
     credentials: true,
@@ -56,7 +57,7 @@ server.use('*', (req, res) => {
         timestamp: new Date().toISOString()
     });
 });
-server.listen(PORT, () => {
-    console.log(`Server is running on http://localhost:${PORT}`);
-    console.log(`Health check available at http://localhost:${PORT}/api/health`);
+server.listen(PORT, HOST, () => {
+    console.log(`Server listening on http://${HOST}:${PORT}`);
+    console.log(`Health check: /api/health`);
 });

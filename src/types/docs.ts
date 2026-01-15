@@ -67,9 +67,12 @@ export const DEFAULT_SECTIONS: DocSectionSpec[] = [
       "request body schema and content-type for each route",
       "authentication and middleware requirements for endpoints",
       "response status codes and payload shapes for endpoints",
-      "examples of 200 responses and common error responses with codes"
+      "examples of 200 responses and common error responses with codes",
+      "controller functions called by routes and their implementations",
+      "route handler implementations and their parameter validation",
+      "controller methods referenced in route definitions"
     ],
-    hint: "Document EVERY endpoint with method, full path, auth/middleware, params (path/query/body), content-type, response schema, 200 example, and error catalogue (status, message, when)."
+    hint: "Document EVERY endpoint with method, full path, auth/middleware, params (path/query/body), content-type, response schema, 200 example, and error catalogue (status, message, when). CRITICAL: For each route, trace to the controller implementation to extract actual parameter validation, request schema, and response types. Follow the call chain from route definition → controller handler → services called."
   },
   {
     id: "services",
