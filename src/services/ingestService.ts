@@ -112,7 +112,15 @@ export async function ingestRepository(params: {
   const files: ManifestFileEntry[] = [];
   let bytesKept = 0;
 
+  console.log(`📦 Processing ${keep.length} files from ${owner}/${repo}...`);
+  let processed = 0;
+  const logInterval = Math.max(1, Math.floor(keep.length / 10)); // Log every 10%
+
   for (const f of keep) {
+    processed++;
+    if (processed % logInterval === 0 || processed === keep.length) {
+      console.log(`   Progress: ${processed}/${keep.length} files (${Math.round(processed/keep.length*100)}%)`);
+    }
     const blob = await octokit.git.getBlob({ owner, repo, file_sha: f.sha });
     const base64Content = (blob.data as any).content as string | undefined;
     const encoding = (blob.data as any).encoding as string | undefined;
