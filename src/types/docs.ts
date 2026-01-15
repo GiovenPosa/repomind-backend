@@ -23,7 +23,7 @@ export const DEFAULT_SECTIONS: DocSectionSpec[] = [
     id: "architecture",
     title: "System Architecture",
     outFile: "architecture.md",
-    topK: 32, // a bit higher to gather scattered context
+    topK: 100, // increased for comprehensive coverage
     category: "architecture",
     queries: [
       "overall system architecture and interactions between modules",
@@ -38,13 +38,13 @@ export const DEFAULT_SECTIONS: DocSectionSpec[] = [
     ],
     hint:
       "Include relevant Mermaid diagram(s): system context, component, sequence, and (if applicable) deployment. " +
-      "Infer only from snippets; don’t invent components. Prefer citing concrete files/functions."
+      "Infer only from snippets; don't invent components. Prefer citing concrete files/functions."
   },
   {
     id: "controllers",
     title: "Controllers",
     outFile: "controllers.md",
-    topK: 28, // ↑ a bit to capture handlers and helper types
+    topK: 100, // increased to capture all handlers
     category: "controllers",
     queries: [
       "express controller handler functions and their responsibilities",
@@ -59,7 +59,7 @@ export const DEFAULT_SECTIONS: DocSectionSpec[] = [
     id: "routes",
     title: "Routes & Endpoints",
     outFile: "routes.md",
-    topK: 28, // ↑ to catch middlewares and validators
+    topK: 100, // increased to catch all routes and middlewares
     category: "routes",
     queries: [
       "all express routes and methods with full paths",
@@ -75,7 +75,7 @@ export const DEFAULT_SECTIONS: DocSectionSpec[] = [
     id: "services",
     title: "Services",
     outFile: "services.md",
-    topK: 28, 
+    topK: 100, // increased for complete service coverage
     category: "services",
     queries: [
       "service modules and business logic in the codebase",
@@ -92,7 +92,7 @@ export const DEFAULT_SECTIONS: DocSectionSpec[] = [
     id: "utils",
     title: "Utilities",
     outFile: "utils.md",
-    topK: 16,
+    topK: 60, // increased for better utility coverage
     category: "utils",
     queries: [
       "utility helpers, key functions and contracts",
@@ -102,7 +102,7 @@ export const DEFAULT_SECTIONS: DocSectionSpec[] = [
     id: "types",
     title: "Types & Interfaces",
     outFile: "types.md",
-    topK: 16,
+    topK: 60, // increased to capture all type definitions
     category: "types",
     queries: [
       "shared type definitions and interfaces used across modules",
@@ -112,7 +112,7 @@ export const DEFAULT_SECTIONS: DocSectionSpec[] = [
     id: "database",
     title: "Database Schema",
     outFile: "database.md",
-    topK: 16,
+    topK: 60, // increased for complete schema coverage
     category: "database",
     queries: [
       "postgres schema, tables and indexes used by the app",
@@ -123,7 +123,7 @@ export const DEFAULT_SECTIONS: DocSectionSpec[] = [
     id: "external-apis",
     title: "External APIs",
     outFile: "external-apis.md",
-    topK: 16,
+    topK: 60, // increased to capture all API integrations
     category: "external-apis",
     queries: [
       "usage of external apis including rate limits and auth",

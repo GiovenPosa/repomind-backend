@@ -38,7 +38,7 @@ type GenOpts = {
   bucket?: string;          // same
   // retrieval tuning
   sections: DocSectionSpec[];
-  capSnippetChars?: number; // default 2500
+  capSnippetChars?: number; // default 5000 (increased for comprehensive coverage)
   keepIfCategory?: boolean; // default true -> filter to section category when we can infer
 };
 
@@ -47,7 +47,7 @@ export async function generateDocsLocal(opts: GenOpts) {
     owner, repo, commit, tenantId, bucket,
     sections,
     outDir = path.join(process.cwd(), "generated-docs", `${owner}_${repo}_${commit.slice(0,7)}`),
-    capSnippetChars = 2500,
+    capSnippetChars = 5000,
     keepIfCategory = true
   } = opts;
 
@@ -55,7 +55,7 @@ export async function generateDocsLocal(opts: GenOpts) {
 
   const generator = new OpenAIGenerator({
     apiKey: process.env.OPENAI_API_KEY,
-    model: process.env.OPENAI_CHAT_MODEL || "gpt-4o-mini",
+    model: process.env.OPENAI_CHAT_MODEL || "gpt-4o",
   });
 
   // For each section: run multiple generic queries, merge hits, categorize & filter
@@ -88,7 +88,7 @@ export async function generateDocsLocal(opts: GenOpts) {
     const s3Needed = { tenantId, bucket };
     if (!s3Needed.bucket) {
       // If you didn’t pass S3 info, we’ll still make the doc—without snippet text we’ll be sparse.
-      console.warn("⚠️ No S3 bucket provided. Docs will have limited context.");
+      console.warn("No S3 bucket provided. Docs will have limited context.");
     }
 
     let snippets: { id: string; filePath: string; startLine: number; endLine: number; text: string }[] = [];
@@ -117,18 +117,46 @@ export async function generateDocsLocal(opts: GenOpts) {
       }).filter(s => s.text && s.text.length);
     }
 
-    // build context and let the LLM render markdown
-    const md = await generateSectionMarkdown({
-      title: sec.title,
-      q: sec.queries.join(" | "),
-      hint: sec.hint,
-      snippets,
-      generator
-    });
+    // Multi-pass generation for large sections
+    const shouldSplit = snippets.length > 60 && (sec.id === "routes" || sec.id === "controllers" || sec.id === "services");
 
-    const outPath = path.join(outDir, sec.outFile);
-    await fs.writeFile(outPath, md, "utf8");
-    console.log(`📄 wrote ${outPath}`);
+    if (shouldSplit) {
+      console.log(`📚 Multi-pass generation for ${sec.title} (${snippets.length} snippets)`);
+      const fileGroups = groupSnippetsByFile(snippets);
+
+      // Generate a page per file or batch of files
+      const batches = batchSnippets(fileGroups, 5); // 5 files per page
+      for (let i = 0; i < batches.length; i++) {
+        const batchSnippets = batches[i].flatMap(g => g.snippets);
+        const batchFiles = batches[i].map(g => g.filePath).join(", ");
+
+        const md = await generateSectionMarkdown({
+          title: `${sec.title} - Part ${i + 1}`,
+          q: sec.queries.join(" | "),
+          hint: `${sec.hint || ""}\n\nThis page covers: ${batchFiles}`,
+          snippets: batchSnippets,
+          generator
+        });
+
+        const fileName = sec.outFile.replace(".md", `-part${i + 1}.md`);
+        const outPath = path.join(outDir, fileName);
+        await fs.writeFile(outPath, md, "utf8");
+        console.log(`📄 wrote ${outPath} (${batchSnippets.length} snippets)`);
+      }
+    } else {
+      // Single-pass generation for smaller sections
+      const md = await generateSectionMarkdown({
+        title: sec.title,
+        q: sec.queries.join(" | "),
+        hint: sec.hint,
+        snippets,
+        generator
+      });
+
+      const outPath = path.join(outDir, sec.outFile);
+      await fs.writeFile(outPath, md, "utf8");
+      console.log(`📄 wrote ${outPath} (${snippets.length} snippets)`);
+    }
   }
 
   // write an index README
@@ -151,12 +179,12 @@ export async function generateDocsPages(opts: {
 }): Promise<{ title: string; html: string }[]> {
   const {
     owner, repo, commit, tenantId, bucket,
-    sections, capSnippetChars = 2500, keepIfCategory = true
+    sections, capSnippetChars = 5000, keepIfCategory = true
   } = opts;
 
   const generator = new OpenAIGenerator({
     apiKey: process.env.OPENAI_API_KEY,
-    model: process.env.OPENAI_CHAT_MODEL || "gpt-4o-mini",
+    model: process.env.OPENAI_CHAT_MODEL || "gpt-4o",
   });
 
   const pages: { title: string; html: string }[] = [];
@@ -207,24 +235,73 @@ export async function generateDocsPages(opts: {
       }).filter(s => s.text && s.text.length);
     }
 
-    const md = await generateSectionMarkdown({
-      title: sec.title,
-      q: sec.queries.join(" | "),
-      hint: sec.hint,
-      snippets,
-      generator
-    });
+    // Multi-pass generation for large sections
+    const shouldSplit = snippets.length > 60 && (sec.id === "routes" || sec.id === "controllers" || sec.id === "services");
 
-    const html = await renderMarkdown(md);
-    pages.push({ title: sec.title, html });
+    if (shouldSplit) {
+      console.log(`📚 Multi-pass generation for ${sec.title} (${snippets.length} snippets)`);
+      const fileGroups = groupSnippetsByFile(snippets);
+
+      // Generate multiple pages for large sections
+      const batches = batchSnippets(fileGroups, 5); // 5 files per page
+      for (let i = 0; i < batches.length; i++) {
+        const batchSnippets = batches[i].flatMap(g => g.snippets);
+        const batchFiles = batches[i].map(g => g.filePath).join(", ");
+
+        const md = await generateSectionMarkdown({
+          title: `${sec.title} - Part ${i + 1}`,
+          q: sec.queries.join(" | "),
+          hint: `${sec.hint || ""}\n\nThis page covers: ${batchFiles}`,
+          snippets: batchSnippets,
+          generator
+        });
+
+        const html = await renderMarkdown(md);
+        pages.push({ title: `${sec.title} - Part ${i + 1}`, html });
+        console.log(`📄 generated page "${sec.title} - Part ${i + 1}" (${batchSnippets.length} snippets)`);
+      }
+    } else {
+      // Single page generation for smaller sections
+      const md = await generateSectionMarkdown({
+        title: sec.title,
+        q: sec.queries.join(" | "),
+        hint: sec.hint,
+        snippets,
+        generator
+      });
+
+      const html = await renderMarkdown(md);
+      pages.push({ title: sec.title, html });
+      console.log(`📄 generated page "${sec.title}" (${snippets.length} snippets)`);
+    }
   }
 
   return pages;
 }
 
+/* ---- helpers for multi-pass generation ---- */
+// Group snippets by file to enable multi-pass generation
+function groupSnippetsByFile(snippets: { id: string; filePath: string; startLine: number; endLine: number; text: string }[]) {
+  const byFile = new Map<string, typeof snippets>();
+  for (const s of snippets) {
+    if (!byFile.has(s.filePath)) byFile.set(s.filePath, []);
+    byFile.get(s.filePath)!.push(s);
+  }
+  return Array.from(byFile.entries()).map(([filePath, snips]) => ({ filePath, snippets: snips }));
+}
+
+// Split large collections into batches for multi-pass
+function batchSnippets(snippets: any[], maxPerBatch: number = 50) {
+  const batches: any[][] = [];
+  for (let i = 0; i < snippets.length; i += maxPerBatch) {
+    batches.push(snippets.slice(i, i + maxPerBatch));
+  }
+  return batches;
+}
+
 /* ---- prompt for markdown ---- */
 function buildContextBlock(snips: { id: string; filePath: string; startLine: number; endLine: number; text: string }[]) {
-  return snips.map(s => 
+  return snips.map(s =>
 `[${s.id}] ${s.filePath}:${s.startLine}-${s.endLine}
 ${s.text}
 ---`).join("\n");
@@ -296,7 +373,7 @@ ${context || "_No context snippets loaded._"}
 - Derive all details strictly from the snippets; do not guess beyond evidence.
 - Use inline citations like [3339a3abe4b6-0001] near each claim.`;
 
-    return await generator.generate(prompt, { system, maxTokens: 2200, temperature: 0.12 })
+    return await generator.generate(prompt, { system, maxTokens: 8000, temperature: 0.12 })
       || `# ${title}\n_Context unavailable._`;
   }
 
@@ -338,7 +415,7 @@ ${context || "_No context snippets loaded._"}
 - Cite snippets inline like [3339a3abe4b6-0001].
 - If something cannot be confirmed from context, mark it **Unknown**.`;
 
-    return await generator.generate(prompt, { system, maxTokens: 1800, temperature: 0.12 })
+    return await generator.generate(prompt, { system, maxTokens: 8000, temperature: 0.12 })
       || `# ${title}\n_Context unavailable._`;
   }
 
@@ -402,7 +479,7 @@ For **each** endpoint discovered in the snippets, include a block like:
 ## Instructions
 - Do not invent fields or paths. Cite every concrete claim.`;
 
-    return await generator.generate(prompt, { system, maxTokens: 2000, temperature: 0.12 })
+    return await generator.generate(prompt, { system, maxTokens: 8000, temperature: 0.12 })
       || `# ${title}\n_Context unavailable._`;
   }
 
@@ -446,9 +523,9 @@ For each controller/handler found:
 
 ## Instructions
 - Cite every concrete fact with [chunk-id].
-- Mark gaps as **Unknown** where the snippets don’t prove it.`;
+- Mark gaps as **Unknown** where the snippets don't prove it.`;
 
-    return await generator.generate(prompt, { system, maxTokens: 1900, temperature: 0.12 })
+    return await generator.generate(prompt, { system, maxTokens: 8000, temperature: 0.12 })
       || `# ${title}\n_Context unavailable._`;
   }
 
@@ -474,6 +551,6 @@ ${context || "_No context snippets loaded._"}
 - Cite snippets inline like [3339a3abe4b6-0001].
 - If context is insufficient, explicitly state gaps and suggest where to look.`;
 
-  return await generator.generate(prompt, { system, maxTokens: 1400, temperature: 0.15 })
+  return await generator.generate(prompt, { system, maxTokens: 8000, temperature: 0.15 })
     || `# ${title}\n_Context unavailable._`;
 }

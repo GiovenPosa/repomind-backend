@@ -7,7 +7,7 @@ export class OpenAIGenerator implements Generator {
 
   constructor(opts?: { apiKey?: string; model?: string }) {
     this.client = new OpenAI({ apiKey: opts?.apiKey ?? process.env.OPENAI_API_KEY! });
-    this.model = opts?.model ?? process.env.OPENAI_CHAT_MODEL ?? "gpt-4o-mini";
+    this.model = opts?.model ?? process.env.OPENAI_CHAT_MODEL ?? "gpt-5.1";
   }
 
   async generate(prompt: string, opts?: { system?: string; maxTokens?: number; temperature?: number }) {
