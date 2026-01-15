@@ -68,10 +68,15 @@ async function queueIngest(opts: {
   installationId?: number;   // <-- add
 }) {
   const { owner, repo, commit, branch, tenantId, installationId } = opts;
+  console.log(`\n🚀 Starting ingestion pipeline for ${owner}/${repo} @ ${commit}`);
+  console.log(`   Branch: ${branch || 'unknown'}`);
+  console.log(`   Installation ID: ${installationId || 'none'}`);
+
   setImmediate(async () => {
     try {
       const cfg = buildCfg();
 
+      console.log(`📥 Step 1/4: Ingesting repository ${owner}/${repo}...`);
       // 1) INGEST
       const manifest = await ingestRepository({
         owner, repo, commit, branch, cfg, s3,
@@ -80,23 +85,25 @@ async function queueIngest(opts: {
         installationId,          
       });
       const commitSha = manifest.commit;
-      console.log(`✅ Ingest complete for ${owner}/${repo} @ ${commitSha}`);
+      console.log(`✅ Step 1/4 complete: Ingested ${owner}/${repo} @ ${commitSha}`);
 
       // DB: commit row
       await saveCommitRow(manifest);
 
+      console.log(`🧩 Step 2/4: Parsing code into chunks...`);
       // 2) PARSE
       await parseCommit({
         s3,
         layout: { bucket: process.env.S3_BUCKET_NAME!, tenantId: tenantId ?? "default", owner, repo, commit: commitSha },
         writePerFileJsonl: true, modelLabel: "chunker-v0.1", targetTokensPerChunk: 1600,
       });
-      console.log(`🧩 Parse complete → s3://${process.env.S3_BUCKET_NAME}/.../parse/`);
+      console.log(`✅ Step 2/4 complete: Parsed into chunks → s3://${process.env.S3_BUCKET_NAME}/.../parse/`);
 
       // DB: chunk metadata
       const idxKey = `${prefix({ tenantId: tenantId ?? "default", owner, repo })}commits/${commitSha}/parse/chunks.index.json`;      const index = await getJson<ChunkIndex>(s3, process.env.S3_BUCKET_NAME!, idxKey);
       await upsertChunks(owner, repo, commitSha, index.chunks);
 
+      console.log(`🧠 Step 3/4: Generating embeddings...`);
       // 3) EMBED → S3 + DB
       if (!process.env.OPENAI_API_KEY) {
         console.warn("⚠️ Skipping embeddings: OPENAI_API_KEY is not set.");
@@ -118,8 +125,9 @@ async function queueIngest(opts: {
         },
       });
 
-      console.log(`🧠 Embeddings complete → ${embedResult.total} vectors (provider=${embedResult.provider})`);
+      console.log(`✅ Step 3/4 complete: Generated ${embedResult.total} embedding vectors (provider=${embedResult.provider})`);
 
+      console.log(`📚 Step 4/4: Generating documentation pages...`);
      // 4) DOCS → generate in memory and publish to Confluence
       try {
         if (!process.env.OPENAI_API_KEY) {
@@ -138,7 +146,8 @@ async function queueIngest(opts: {
           const rawSpaceKey = `${owner}_${repo}`;
           const spaceKey = normalizeSpaceKey(rawSpaceKey);
 
-          console.log("🧭 Confluence target");
+          console.log(`✅ Generated ${pages.length} documentation pages`);
+          console.log(`📤 Publishing to Confluence...`);
           console.log("   • base:", process.env.CONFLUENCE_BASE_URL);
           console.log("   • spaceKey:", spaceKey);
           console.log("   • spaceName:", `${toTitleCase(repo)} Docs`);
@@ -159,12 +168,12 @@ async function queueIngest(opts: {
           }
         );
 
-          console.log("🚀 Published docs to Confluence", {
-            spaceId: publishResult.spaceId,
-            rootId: publishResult.rootId,
-            repo: `${owner}/${repo}`,
-            commit: commitSha,
-          });
+          console.log("✅ Step 4/4 complete: Published to Confluence successfully! 🎉");
+          console.log("   • Space ID:", publishResult.spaceId);
+          console.log("   • Root Page ID:", publishResult.rootId);
+          console.log("   • Repository:", `${owner}/${repo}`);
+          console.log("   • Commit:", commitSha);
+          console.log(`\n✨ Full pipeline complete for ${owner}/${repo} @ ${commitSha}\n`);
         }
       } catch (e: any) {
         // Detailed Axios error logging for fast diagnosis
